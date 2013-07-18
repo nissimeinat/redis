@@ -758,17 +758,33 @@ void configSetCommand(redisClient *c) {
         sdsfreesplitres(v,vlen);
     } else if (!strcasecmp(c->argv[2]->ptr,"slave-output-buffer-throttling")) {
         int vlen;
+        char *err;
         sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
+        unsigned long long slave_obuf_throttle_threshold;
+        unsigned long long slave_obuf_throttle_limit;
+        unsigned long long slave_obuf_throttle_repl_rate;
+        int slave_obuf_throttle_max_delay_ms;
 
         if (vlen != 4) {
             sdsfreesplitres(v,vlen);
             goto badfmt;
         }
 
-        server.slave_obuf_throttle_threshold = strtoll(v[0],NULL,10);
-        server.slave_obuf_throttle_limit = strtoll(v[1],NULL,10);
-        server.slave_obuf_throttle_repl_rate = strtoll(v[2],NULL,10);
-        server.slave_obuf_throttle_max_delay_ms = strtoul(v[3],NULL,10);
+        /* Verify format is okay */
+        slave_obuf_throttle_threshold = strtoll(v[0],&err,10);
+        if (!err || *err || slave_obuf_throttle_threshold < 0) goto badfmt;
+        slave_obuf_throttle_limit = strtoll(v[1],&err,10);
+        if (!err || *err || slave_obuf_throttle_limit < 0) goto badfmt;
+        slave_obuf_throttle_repl_rate = strtoll(v[2],&err,10);
+        if (!err || *err || slave_obuf_throttle_repl_rate < 0) goto badfmt;
+        slave_obuf_throttle_max_delay_ms = strtoul(v[3],&err,10);
+        if (!err || *err) goto badfmt;
+
+        /* set all at once */
+        server.slave_obuf_throttle_threshold = slave_obuf_throttle_threshold;
+        server.slave_obuf_throttle_limit = slave_obuf_throttle_limit;
+        server.slave_obuf_throttle_repl_rate = slave_obuf_throttle_repl_rate;
+        server.slave_obuf_throttle_max_delay_ms = slave_obuf_throttle_max_delay_ms;
 
         sdsfreesplitres(v,vlen);
     } else if (!strcasecmp(c->argv[2]->ptr,"stop-writes-on-bgsave-error")) {
