@@ -67,6 +67,7 @@ which slave server buffers grow during replication.
 Additional Redis Configuration Parameters
 -----------------------------------------
 
+``
 load-on-startup
   Provides the ability to disable auto-loading of RDB/AOF files on startup,
   even if they exist.  This is useful on slaves that would immediately need
@@ -78,11 +79,12 @@ preload-file
 
 optionally-include
   Works like 'include' but silently ignores non-existing files.
-
+``
 
 Additional Statistics
 ---------------------
 
+``
 keyspace_read_hits
 keyspace_write_hits
 keyspace_read_misses
@@ -98,11 +100,12 @@ rdb_saves
   Counts the number of regular background saves performed.  This includes
   explicit BGSAVE as well as automatic saves due to 'save' configuration
   parameter thresholds, but not saves to dedicated SYNC file or BGSAVETO.
-
+``
 
 New/Modified Redis Commands
 ---------------------------
 
+``
 SYNC <dbversion>
   When sent by a slave, the master will compare the requested dbversion to
   its own.  If identical, it will respond with "+INSYNC" and skip creation
@@ -157,7 +160,7 @@ SLOWLOG GET
   which affected the calculation complexity of the slow command. This
   is useful if the command operated on keys that don't exist anymore
   or if the command had more parameters than allowed in the slow log.
-
+``
 
 Build Tree Changes
 ------------------
@@ -167,14 +170,18 @@ It is possible to explicitly specify target architecture by passing a
 BUILD_ARCH= variable to make.  For example, to build both 64-bit and 32-bit
 versions in the same source tree in Linux:
 
-  make BUILD_ARCH=x86_64
-  make BUILD_ARCH=i686
+``
+make BUILD_ARCH=x86_64
+make BUILD_ARCH=i686
+``
 
 When installed, i686 executables also have a .i686 suffix to allow simple
 installation into a single location:
 
-  make BUILD_ARCH=x86_64 install
-  make BUILD_ARCH=i686 install
+``
+make BUILD_ARCH=x86_64 install
+make BUILD_ARCH=i686 install
+``
 
 Will (by default) result with a /usr/local/bin/redis-server 64-bit version
 and a /usr/local/bin/redis-server.i686 32-bit version.
