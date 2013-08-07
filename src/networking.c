@@ -1386,7 +1386,7 @@ int checkClientOutputBufferLimits(redisClient *c) {
 
         if (obuf_bytes_per_sec && used_mem > elapsed_repl_time * obuf_bytes_per_sec) {
             size_t bytes_exceeding = used_mem - (elapsed_repl_time * obuf_bytes_per_sec);
-            unsigned long throttle_time_ms = bytes_exceeding * 1000 / obuf_bytes_per_sec;
+            unsigned long throttle_time_ms = bytes_exceeding * 1000 / (obuf_bytes_per_sec ? obuf_bytes_per_sec : 1);
 
             if (server.slave_obuf_throttle_max_delay_ms && throttle_time_ms > server.slave_obuf_throttle_max_delay_ms)
                 throttle_time_ms = server.slave_obuf_throttle_max_delay_ms;
