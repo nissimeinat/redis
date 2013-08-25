@@ -60,11 +60,12 @@ robj *lookupKeyRead(redisDb *db, robj *key) {
 
     expireIfNeeded(db,key);
     val = lookupKey(db,key);
-    if (server.current_client != NULL && !(server.current_client->flags & REDIS_MASTER)) {
+    if (server.current_client != NULL && !(server.current_client->flags & REDIS_MASTER) && !server.stat_current_request_recorded) {
         if (val == NULL)
             server.stat_keyspace_read_misses++;
         else
             server.stat_keyspace_read_hits++;
+        server.stat_current_request_recorded = 1;
     }
     return val;
 }
@@ -74,11 +75,12 @@ robj *lookupKeyWrite(redisDb *db, robj *key) {
     
     expireIfNeeded(db,key);
     val = lookupKey(db,key);
-    if (server.current_client != NULL && !(server.current_client->flags & REDIS_MASTER)) {
+    if (server.current_client != NULL && !(server.current_client->flags & REDIS_MASTER) && !server.stat_current_request_recorded) {
         if (val == NULL)
             server.stat_keyspace_write_misses++;
         else
             server.stat_keyspace_write_hits++;
+        server.stat_current_request_recorded = 1;
     }
     return val;
 }
@@ -551,7 +553,6 @@ int expireIfNeeded(redisDb *db, robj *key) {
  * unit is either UNIT_SECONDS or UNIT_MILLISECONDS, and is only used for
  * the argv[2] parameter. The basetime is always specified in milliseconds. */
 void expireGenericCommand(redisClient *c, long long basetime, int unit) {
-    dictEntry *de;
     robj *key = c->argv[1], *param = c->argv[2];
     long long when; /* unix time in milliseconds when the key will expire. */
 
@@ -561,11 +562,12 @@ void expireGenericCommand(redisClient *c, long long basetime, int unit) {
     if (unit == UNIT_SECONDS) when *= 1000;
     when += basetime;
 
-    de = dictFind(c->db->dict,key->ptr);
-    if (de == NULL) {
+    /* No key, return zero. */
+    if (lookupKeyRead(c->db,key) == NULL) {
         addReply(c,shared.czero);
         return;
     }
+
     /* EXPIRE with negative TTL, or EXPIREAT with a timestamp into the past
      * should never be executed as a DEL when load the AOF or in the context
      * of a slave instance.
