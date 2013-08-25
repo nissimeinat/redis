@@ -1683,6 +1683,7 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
         touched = 1;
         server.dirty++;
     }
+    slowlogAddComplexityParam('M', zsetLength(dstobj));
     if (dstzset->zsl->length) {
         /* Convert to ziplist when in limits. */
         if (dstzset->zsl->length <= server.zset_max_ziplist_entries &&
@@ -1697,7 +1698,6 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
         decrRefCount(dstobj);
         addReply(c,shared.czero);
     }
-    slowlogAddComplexityParam('M', zsetLength(dstobj));    
     zfree(src);
 }
 
