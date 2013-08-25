@@ -181,12 +181,20 @@ void syncnowCommand(redisClient *c) {
     }
 
     redisLog(REDIS_NOTICE,"Starting BGSAVE for SYNCNOW");
-    addReplyMultiBulkLen(c, 2);
-    addReplyStatus(c, "SYNC STARTED");
         
     if (rdbSaveBackground(server.rdb_syncfilename != NULL ? server.rdb_syncfilename : server.rdb_filename, REDIS_BGSAVE_SYNC, -1) != REDIS_OK) {
         redisLog(REDIS_NOTICE,"Replication failed, can't BGSAVE");
         addReplyError(c,"Unable to perform background save");
+        return;
+    }
+
+    /* If we got here it means syncing is going to happen and we shouldn't use the normal output buffer since it's going to be used as the replication buffer.
+       Any response should be sent directly on the FD */
+    #define SYNCNOW_HDR "*2\r\n+SYNC STARTED\r\n"
+    if (syncWrite(c->fd, SYNCNOW_HDR, sizeof(SYNCNOW_HDR)-1, 10) == -1) {
+        /* Sending response failed, because a partial response might have failed there's no choice other than disconnecting the client */
+        redisLog(REDIS_NOTICE,"SYNCNOW failed writing response header to client");
+        freeClientAsync(c);
         return;
     }
 

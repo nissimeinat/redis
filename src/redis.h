@@ -834,6 +834,7 @@ void exitFromChild(int retcode);
 redisClient *createClient(int fd);
 void closeTimedoutClients(void);
 void freeClient(redisClient *c);
+void freeClientAsync(redisClient *c);
 void resetClient(redisClient *c);
 void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask);
 void addReply(redisClient *c, robj *obj);
