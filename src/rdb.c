@@ -656,27 +656,6 @@ int rdbSave(char *filename, int dbnum) {
     snprintf(magic,sizeof(magic),"REDIS%04d",REDIS_RDB_VERSION);
     if (rdbWriteRaw(&rdb,magic,9) == -1) goto werr;
 
-    /* write dbversion */
-    if (server.conditional_sync) {
-        char dbversion_hex[20];
-        robj *key;
-        robj *val;
-        int ret;
-        
-        snprintf(dbversion_hex, sizeof(dbversion_hex)-1, "%016llx", server.dbversion);        
-        key = createObject(REDIS_STRING, sdsnew(REDIS_RDB_DBVERSION_KEY));
-        val = createObject(REDIS_STRING, sdsnew(dbversion_hex));
-
-        ret = rdbSaveKeyValuePair(&rdb, key, val, -1, -1);
-        if (ret != -1) {
-            /* verify we don't write it again if for any reason it got loaded/inserted */
-            dbDelete(&server.db[0], key);
-        }
-        decrRefCount(key);
-        decrRefCount(val);
-        if (ret == -1) goto werr;        
-    }
-    
     for (j = 0; j < server.dbnum; j++) {
         /* Skip all DB's except the one specified (if specified) */
         if (dbnum != -1 && dbnum != j)
@@ -776,8 +755,8 @@ int rdbSaveBackground(char *filename, int bgsavetype, int dbnum) {
         int retval;
 
         /* Child */
-        if (server.ipfd > 0) close(server.ipfd);
-        if (server.sofd > 0) close(server.sofd);
+        closeListeningSockets(0);
+        redisSetProcTitle("redis-rdb-bgsave");
         retval = rdbSave(filename, dbnum);
         if (retval == REDIS_OK) {
             size_t private_dirty = zmalloc_get_private_dirty();
@@ -822,7 +801,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
     size_t len;
     unsigned int i;
 
-    redisLog(REDIS_DEBUG,"LOADING OBJECT %d (at %d)\n",rdbtype,rioTell(rdb));
+    redisLog(REDIS_DEBUG,"LOADING OBJECT %d (at %zu)\n",rdbtype,rioTell(rdb));
     if (rdbtype == REDIS_RDB_TYPE_STRING) {
         /* Read string value */
         if ((o = rdbLoadEncodedStringObject(rdb)) == NULL) return NULL;
@@ -1119,26 +1098,6 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
     }
 }
 
-static void readDbVersion(void)
-{    
-    robj *key = createObject(REDIS_STRING, sdsnew(REDIS_RDB_DBVERSION_KEY));
-    robj *val = lookupKey(&server.db[0], key);
-
-    if (val != NULL && val->type == REDIS_STRING) {
-        char *err = NULL;
-        unsigned long long dbversion = strtoull(val->ptr, &err, 16);
-
-        if (!err || *err != '\0') {
-            redisLog(REDIS_WARNING, "Invalid dbversion reading DB from file");            
-        } else {
-            server.dbversion = dbversion;
-            dbDelete(&server.db[0], key);
-        }
-    }
-
-    decrRefCount(key);
-}
-
 int rdbLoad(char *filename) {
     uint32_t dbid;
     int type, rdbver;
@@ -1265,9 +1224,6 @@ int rdbLoad(char *filename) {
             exit(1);
         }
     }
-
-    /* Read dbversion */
-    readDbVersion();
 
     fclose(fp);
     stopLoading();

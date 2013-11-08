@@ -51,6 +51,7 @@
 #include <unistd.h>
 #include "rio.h"
 #include "util.h"
+#include "crc64.h"
 #include "config.h"
 #include "redis.h"
 

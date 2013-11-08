@@ -9,9 +9,8 @@
 # flags only to be used when compiling / linking Redis itself REDIS_CFLAGS
 # and REDIS_LDFLAGS are used instead (this is the case of 'make gcov').
 #
-# Dependencies are stored in the Makefile.dep file. This file is built 
-# automatically if it doesn't exist. To rebuild this file just use 
-# 'make Makefile.dep', but this is only needed by developers.
+# Dependencies are stored in the Makefile.dep file. To rebuild this file
+# Just use 'make dep', but this is only needed by developers.
 
 ifeq (,$(filter obj.%,$(notdir $(CURDIR))))
 include target.mk
@@ -33,56 +32,64 @@ OPTIMIZATION?=-O2
 DEPENDENCY_TARGETS=hiredis linenoise lua
 
 # Default settings
-STD= -std=c99 -pedantic
-WARN= -Wall
-OPT= $(OPTIMIZATION)
+STD=-std=c99 -pedantic
+WARN=-Wall
+OPT=$(OPTIMIZATION)
+
+PREFIX?=/usr/local
+INSTALL_BIN=$(PREFIX)/bin
+INSTALL=install
 
 # Default allocator
 ifeq ($(uname_S),Linux)
-  MALLOC=jemalloc
+	MALLOC=jemalloc
 else
-  MALLOC=libc
+	MALLOC=libc
 endif
 
 # Backwards compatibility for selecting an allocator
 ifeq ($(USE_TCMALLOC),yes)
-  MALLOC=tcmalloc
+	MALLOC=tcmalloc
 endif
 
 ifeq ($(USE_TCMALLOC_MINIMAL),yes)
-  MALLOC=tcmalloc_minimal
+	MALLOC=tcmalloc_minimal
 endif
 
 ifeq ($(USE_JEMALLOC),yes)
-  MALLOC=jemalloc
+	MALLOC=jemalloc
 endif
 
 # Override default settings if possible
 -include .make-settings
 
+FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
+FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
+FINAL_LIBS=-lm
+DEBUG=-g -ggdb
+
 ifeq ($(uname_S),SunOS)
-  FINAL_CFLAGS= $(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS) -D__EXTENSIONS__ -D_XPG6
-  FINAL_LDFLAGS= $(LDFLAGS) $(REDIS_LDFLAGS) -g -ggdb
-  FINAL_LIBS= -ldl -lnsl -lsocket -lm -lpthread
-  DEBUG= -g -ggdb
+	INSTALL=cp -pf
+	FINAL_CFLAGS+= -D__EXTENSIONS__ -D_XPG6
+	FINAL_LIBS+= -ldl -lnsl -lsocket -lpthread
+else ifeq ($(uname_S),Darwin)
+	
 else
-  FINAL_CFLAGS= $(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
-  FINAL_LDFLAGS= $(LDFLAGS) $(REDIS_LDFLAGS) -g -rdynamic -ggdb
-  FINAL_LIBS= -lm -pthread
-  DEBUG= -g -rdynamic -ggdb
+	FINAL_LDFLAGS+= -rdynamic
+	FINAL_LIBS+= -pthread
 endif
 
 # Include paths to dependencies
 FINAL_CFLAGS+= -I$(SRCDIR)/../deps/hiredis -I$(SRCDIR)/../deps/linenoise -I$(SRCDIR)/../deps/lua/src
 
 ifeq ($(MALLOC),tcmalloc)
-  FINAL_CFLAGS+= -DUSE_TCMALLOC
-  FINAL_LIBS+= -ltcmalloc
+	FINAL_CFLAGS+= -DUSE_TCMALLOC
+	FINAL_LIBS+= -ltcmalloc
 endif
 
 ifeq ($(MALLOC),tcmalloc_minimal)
-  FINAL_CFLAGS+= -DUSE_TCMALLOC
-  FINAL_LIBS+= -ltcmalloc_minimal
+	FINAL_CFLAGS+= -DUSE_TCMALLOC
+	FINAL_LIBS+= -ltcmalloc_minimal
 endif
 
 ifeq ($(MALLOC),jemalloc)
@@ -94,10 +101,6 @@ endif
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
 REDIS_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
 REDIS_INSTALL=$(QUIET_INSTALL)$(INSTALL)
-
-PREFIX?=/usr/local
-INSTALL_BIN= $(PREFIX)/bin
-INSTALL= cp -pf
 
 CCCOLOR="\033[34m"
 LINKCOLOR="\033[34;1m"
@@ -112,19 +115,19 @@ QUIET_LINK = @printf '    %b %b\n' $(LINKCOLOR)LINK$(ENDCOLOR) $(BINCOLOR)$@$(EN
 QUIET_INSTALL = @printf '    %b %b\n' $(LINKCOLOR)INSTALL$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
 endif
 
-REDIS_SERVER_NAME= redis-server
-REDIS_SENTINEL_NAME= redis-sentinel
-REDIS_SERVER_OBJ= adlist.o ae.o anet.o dict.o redis.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o migrate.o endianconv.o slowlog.o scripting.o bio.o rio.o rand.o memtest.o crc64.o bitops.o sentinel.o
-REDIS_CLI_NAME= redis-cli
-REDIS_CLI_OBJ= anet.o sds.o adlist.o redis-cli.o zmalloc.o release.o anet.o ae.o
-REDIS_BENCHMARK_NAME= redis-benchmark
-REDIS_BENCHMARK_OBJ= ae.o anet.o redis-benchmark.o sds.o adlist.o zmalloc.o redis-benchmark.o
-REDIS_CHECK_DUMP_NAME= redis-check-dump
-REDIS_CHECK_DUMP_OBJ= redis-check-dump.o lzf_c.o lzf_d.o crc64.o
-REDIS_CHECK_AOF_NAME= redis-check-aof
-REDIS_CHECK_AOF_OBJ= redis-check-aof.o
-RDB_MERGER_NAME = rdb-merger
-RDB_MERGER_OBJ = rdb-merger.o redis_mainless.o $(filter-out redis.o,$(REDIS_SERVER_OBJ))
+REDIS_SERVER_NAME=redis-server
+REDIS_SENTINEL_NAME=redis-sentinel
+REDIS_SERVER_OBJ=adlist.o ae.o anet.o dict.o redis.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o migrate.o endianconv.o slowlog.o scripting.o bio.o rio.o rand.o memtest.o crc64.o bitops.o sentinel.o notify.o setproctitle.o
+REDIS_CLI_NAME=redis-cli
+REDIS_CLI_OBJ=anet.o sds.o adlist.o redis-cli.o zmalloc.o release.o anet.o ae.o crc64.o
+REDIS_BENCHMARK_NAME=redis-benchmark
+REDIS_BENCHMARK_OBJ=ae.o anet.o redis-benchmark.o sds.o adlist.o zmalloc.o redis-benchmark.o
+REDIS_CHECK_DUMP_NAME=redis-check-dump
+REDIS_CHECK_DUMP_OBJ=redis-check-dump.o lzf_c.o lzf_d.o crc64.o
+REDIS_CHECK_AOF_NAME=redis-check-aof
+REDIS_CHECK_AOF_OBJ=redis-check-aof.o
+RDB_MERGER_NAME=rdb-merger
+RDB_MERGER_OBJ=rdb-merger.o redis_mainless.o $(filter-out redis.o,$(REDIS_SERVER_OBJ))
 
 # Common dependencies
 LIBHIREDIS=$(SRCDIR)/../deps/hiredis/$(OBJDIR)/libhiredis.a
@@ -139,10 +142,12 @@ all: $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCH
 .PHONY: all
 
 # Deps (use make dep to generate this)
--include $(SRCDIR)/Makefile.dep
+include $(SRCDIR)/Makefile.dep
 
-$(SRCDIR)/Makefile.dep:
+dep:
 	-$(REDIS_CC) -MM ../*.c > $(SRCDIR)/Makefile.dep
+
+.PHONY: dep
 
 persist-settings: distclean
 	echo STD=$(STD) >> .make-settings
@@ -221,6 +226,8 @@ distclean: clean
 
 test: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME)
 	@(cd $(SRCDIR)/..; ./runtest)
+
+check: test
 
 lcov:
 	$(MAKE) gcov
