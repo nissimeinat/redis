@@ -1660,6 +1660,21 @@ cleanup:
     return retval;
 }
 
+/* Rewrite the slave-output-buffer-throttling option. */
+void rewriteConfigSlaveoutputbufferthrottlingOption(struct rewriteConfigState *state) {
+    char *option = "slave-output-buffer-throttling";
+    sds line;
+
+    line = sdscatprintf(sdsempty(), "%s %llu %llu %llu %d %lld",
+        option,
+        server.slave_obuf_throttle_threshold, 
+        server.slave_obuf_throttle_limit,
+        server.slave_obuf_throttle_repl_rate,
+        server.slave_obuf_throttle_max_delay_ms,
+        server.throttle_resume_time_ms);
+    rewriteConfigRewriteLine(state,option,line, server.slave_obuf_throttle_threshold != REDIS_DEFAULT_SLAVE_OBUF_THROTTLE_THRESHOLD);
+}
+
 /* Rewrite the configuration file at "path".
  * If the configuration file already exists, we try at best to retain comments
  * and overall structure.
@@ -1682,7 +1697,6 @@ int rewriteConfig(char *path) {
     /* TODO: Turn every default into a define, use it also in
      * initServerConfig(). */
 
-    /* MERGE-TODO: Add Garantia keywords here */
     rewriteConfigYesNoOption(state,"daemonize",server.daemonize,0);
     rewriteConfigStringOption(state,"pidfile",server.pidfile,REDIS_DEFAULT_PID_FILE);
     rewriteConfigNumericalOption(state,"port",server.port,REDIS_SERVERPORT);
@@ -1754,6 +1768,11 @@ int rewriteConfig(char *path) {
     rewriteConfigClientoutputbufferlimitOption(state);
     rewriteConfigNumericalOption(state,"hz",server.hz,REDIS_DEFAULT_HZ);
     rewriteConfigYesNoOption(state,"aof-rewrite-incremental-fsync",server.aof_rewrite_incremental_fsync,REDIS_DEFAULT_AOF_REWRITE_INCREMENTAL_FSYNC);
+    rewriteConfigYesNoOption(state,"load-on-startup",server.load_on_startup,REDIS_DEFAULT_LOAD_ON_STARTUP);
+    rewriteConfigStringOption(state,"preload-file",server.preload_file,NULL);
+    rewriteConfigYesNoOption(state,"rdb-incremental-fsync",server.rdb_incremental_fsync,REDIS_DEFAULT_RDB_INCREMENTAL_FSYNC);
+    rewriteConfigStringOption(state,"syncdbfilename",server.rdb_syncfilename,NULL);
+    rewriteConfigSlaveoutputbufferthrottlingOption(state);
 
     /* Step 3: remove all the orphaned lines in the old file, that is, lines
      * that were used by a config option and are no longer used, like in case

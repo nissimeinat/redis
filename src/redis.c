@@ -1294,7 +1294,7 @@ void initServerConfig() {
     server.syslog_ident = zstrdup(REDIS_DEFAULT_SYSLOG_IDENT);
     server.syslog_facility = LOG_LOCAL0;
     server.daemonize = REDIS_DEFAULT_DAEMONIZE;
-    server.load_on_startup = 1;
+    server.load_on_startup = REDIS_DEFAULT_LOAD_ON_STARTUP;
     server.preload_file = NULL;
     server.aof_state = REDIS_AOF_OFF;
     server.aof_fsync = REDIS_DEFAULT_AOF_FSYNC;
@@ -1312,7 +1312,7 @@ void initServerConfig() {
     server.aof_selected_db = -1; /* Make sure the first time will not match */
     server.aof_flush_postponed_start = 0;
     server.aof_rewrite_incremental_fsync = REDIS_DEFAULT_AOF_REWRITE_INCREMENTAL_FSYNC;
-    server.rdb_incremental_fsync = 1;
+    server.rdb_incremental_fsync = REDIS_DEFAULT_RDB_INCREMENTAL_FSYNC;
     server.pidfile = zstrdup(REDIS_DEFAULT_PID_FILE);
     server.rdb_filename = zstrdup(REDIS_DEFAULT_RDB_FILENAME);
     server.aof_filename = zstrdup("appendonly.aof");
@@ -1377,10 +1377,10 @@ void initServerConfig() {
     server.repl_no_slaves_since = time(NULL);
 
     /* Throttling */
-    server.slave_obuf_throttle_threshold = 0;
-    server.slave_obuf_throttle_limit = 0;
-    server.slave_obuf_throttle_repl_rate = 30*1024*1024;
-    server.slave_obuf_throttle_max_delay_ms = 500;
+    server.slave_obuf_throttle_threshold = REDIS_DEFAULT_SLAVE_OBUF_THROTTLE_THRESHOLD;
+    server.slave_obuf_throttle_limit = REDIS_DEFAULT_SLAVE_OBUF_THROTTLE_LIMIT;
+    server.slave_obuf_throttle_repl_rate = REDIS_DEFAULT_SLAVE_OBUF_THROTTLE_REPL_RATE;
+    server.slave_obuf_throttle_max_delay_ms = REDIS_DEFAULT_SLAVE_OBUF_THROTTLE_MAX_DELAY_MS;
     server.throttle_resume_time_ms = 0;
 
     /* Client output buffer limits */
@@ -2630,7 +2630,6 @@ void monitorCommand(redisClient *c) {
     /* ignore MONITOR if already slave or in monitor mode */
     if (c->flags & REDIS_SLAVE) return;
 
-    /* MERGE-TODO: we're ignoring truncated monitor, check this */
     c->flags |= (REDIS_SLAVE|REDIS_MONITOR);
     c->slaveseldb = 0;
     listAddNodeTail(server.monitors,c);
