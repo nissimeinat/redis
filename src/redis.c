@@ -3093,7 +3093,8 @@ int main(int argc, char **argv) {
     #ifdef __linux__
         linuxOvercommitMemoryWarning();
     #endif
-        loadDataFromDisk();
+        if (server.load_on_startup || server.preload_file != NULL)
+            loadDataFromDisk();
         if (server.ipfd_count > 0)
             redisLog(REDIS_NOTICE,"The server is now ready to accept connections on port %d", server.port);
         if (server.sofd > 0)
