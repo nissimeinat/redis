@@ -50,6 +50,7 @@
  * from tail to head, useful for ZREVRANGE. */
 
 #include "redis.h"
+#include "slowlog.h"
 #include <math.h>
 
 zskiplistNode *zslCreateNode(int level, double score, robj *obj) {
