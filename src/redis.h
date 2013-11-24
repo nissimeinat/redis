@@ -698,6 +698,7 @@ struct redisServer {
     int aof_lastbgrewrite_status;   /* REDIS_OK or REDIS_ERR */
     unsigned long aof_delayed_fsync;  /* delayed AOF fsync() counter */
     int aof_rewrite_incremental_fsync;/* fsync incrementally while rewriting? */
+    off_t aof_autosync_bytes;       /* incremental aof rewrite bytes before fsync */
     /* RDB persistence */
     long long dirty;                /* Changes to DB from the last save */
     long long dirty_before_bgsave;  /* Used to restore dirty on failed BGSAVE */
@@ -716,7 +717,8 @@ struct redisServer {
     time_t rdb_save_time_start;     /* Current RDB save start time. */
     int lastbgsave_status;          /* REDIS_OK or REDIS_ERR */
     int stop_writes_on_bgsave_err;  /* Don't allow writes if can't BGSAVE */
-    int rdb_incremental_fsync;      /* fsync incrementally while rewriting? */
+    int rdb_incremental_fsync;      /* fsync incrementally while writing rdb? */
+    off_t rdb_autosync_bytes;       /* incremental rdb maxium bytes before fsync */
     /* Propagation of commands in AOF / replication */
     redisOpArray also_propagate;    /* Additional command to propagate. */
     int draining;                   /* Currently draining to slaves? */

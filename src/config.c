@@ -365,12 +365,20 @@ void loadServerConfigFromString(char *config) {
             if ((server.aof_rewrite_incremental_fsync = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
+        } else if (!strcasecmp(argv[0],"aof-autosync-bytes") &&
+                   argc == 2)
+        {
+            server.aof_autosync_bytes = memtoll(argv[1], NULL);
         } else if (!strcasecmp(argv[0],"rdb-incremental-fsync") &&
                    argc == 2)
         {
             if ((server.rdb_incremental_fsync = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
+        } else if (!strcasecmp(argv[0],"rdb-autosync-bytes") &&
+                   argc == 2)
+        {
+            server.rdb_autosync_bytes = memtoll(argv[1], NULL);
         } else if (!strcasecmp(argv[0],"requirepass") && argc == 2) {
             if (strlen(argv[1]) > REDIS_AUTHPASS_MAX_LEN) {
                 err = "Password is longer than REDIS_AUTHPASS_MAX_LEN";
@@ -679,11 +687,17 @@ void configSetCommand(redisClient *c) {
 
         if (yn == -1) goto badfmt;
         server.aof_rewrite_incremental_fsync = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr,"aof-autosync-bytes")) {
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
+        server.aof_autosync_bytes = ll;
     } else if (!strcasecmp(c->argv[2]->ptr,"rdb-incremental-fsync")) {
         int yn = yesnotoi(o->ptr);
 
         if (yn == -1) goto badfmt;
         server.rdb_incremental_fsync = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr,"rdb-autosync-bytes")) {
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
+        server.rdb_autosync_bytes = ll;
     } else if (!strcasecmp(c->argv[2]->ptr,"save")) {
         int vlen, j;
         sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
@@ -1004,6 +1018,10 @@ void configGetCommand(redisClient *c) {
     config_get_numerical_field("min-slaves-to-write",server.repl_min_slaves_to_write);
     config_get_numerical_field("min-slaves-max-lag",server.repl_min_slaves_max_lag);
     config_get_numerical_field("hz",server.hz);
+    config_get_numerical_field("aof-autosync-bytes",
+            server.aof_autosync_bytes);
+    config_get_numerical_field("rdb-autosync-bytes",
+            server.rdb_autosync_bytes);
 
     /* Bool (yes/no) values */
     config_get_bool_field("no-appendfsync-on-rewrite",
@@ -1779,6 +1797,8 @@ int rewriteConfig(char *path) {
     rewriteConfigYesNoOption(state,"load-on-startup",server.load_on_startup,REDIS_DEFAULT_LOAD_ON_STARTUP);
     rewriteConfigStringOption(state,"preload-file",server.preload_file,NULL);
     rewriteConfigYesNoOption(state,"rdb-incremental-fsync",server.rdb_incremental_fsync,REDIS_DEFAULT_RDB_INCREMENTAL_FSYNC);
+    rewriteConfigNumericalOption(state,"aof-autosync-bytes",server.aof_autosync_bytes,REDIS_AOF_AUTOSYNC_BYTES);
+    rewriteConfigNumericalOption(state,"rdb-autosync-bytes",server.rdb_autosync_bytes,REDIS_RDB_AUTOSYNC_BYTES);
     rewriteConfigStringOption(state,"syncdbfilename",server.rdb_syncfilename,NULL);
     rewriteConfigSlaveoutputbufferthrottlingOption(state);
     if (server.sentinel_mode) rewriteConfigSentinelOption(state);

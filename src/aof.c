@@ -857,7 +857,7 @@ int rewriteAppendOnlyFile(char *filename) {
 
     rioInitWithFile(&aof,fp);
     if (server.aof_rewrite_incremental_fsync)
-        rioSetAutoSync(&aof,REDIS_AOF_AUTOSYNC_BYTES);
+        rioSetAutoSync(&aof,server.aof_autosync_bytes);
     for (j = 0; j < server.dbnum; j++) {
         char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
         redisDb *db = server.db+j;

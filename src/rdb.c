@@ -650,7 +650,7 @@ int rdbSave(char *filename, int dbnum) {
 
     rioInitWithFile(&rdb,fp);
     if (server.rdb_incremental_fsync)
-        rioSetAutoSync(&rdb,REDIS_RDB_AUTOSYNC_BYTES);
+        rioSetAutoSync(&rdb,server.rdb_autosync_bytes);
     if (server.rdb_checksum)
         rdb.update_cksum = rioGenericUpdateChecksum;
     snprintf(magic,sizeof(magic),"REDIS%04d",REDIS_RDB_VERSION);
