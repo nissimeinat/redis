@@ -79,6 +79,16 @@ preload-file
 
 optionally-include
   Works like 'include' but silently ignores non-existing files.
+
+rdb-incremental-fsync
+  Works like aof-rewrite-incremental-fsync, but used to provide incremental
+  fsync on RDB write operations.
+
+aof-autosync-bytes
+rdb-autosync-bytes
+  Configures the number of bytes before fsync when writing RDB or
+  rewriting AOF files.
+
 ```
 
 Additional Statistics
@@ -149,11 +159,6 @@ DRAIN
 HIDECONNECTION
   Flags the current client connection hidden, so that its commands will
   not show up in MONITOR output.
-
-MONITOR TRUNCATED
-  The 'TRUNCATED' suffix flag can be appended to the standard MONITOR
-  command in order to request limited-length command output.  Currently
-  all commands are truncated to max. 1024 bytes (hard coded).
 
 SLOWLOG GET
   The slowlog now includes some additional information showing values
