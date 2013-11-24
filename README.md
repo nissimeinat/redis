@@ -125,8 +125,8 @@ SYNCNOW
   The server responds with an ERROR if another SYNC or BGSAVE are already
   in progress.  Otherwise, a 2-part multibulk is returned immediately with
   the first part being a "+SYNC STARTED" status.  The 2nd part is sent
-  as soon as the RDB is created and includes the contents of the RDB, and
-  the connection continues to behave as a standard slave connection. 
+  as soon as the RDB is created and includes the contents of the RDB. Once
+  the RDB has been delivered, the connection closes.
 
 BGSAVETO <filename>
   Initiate an ad-hoc BGSAVE operation to a specific file.  The file will

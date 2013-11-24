@@ -241,6 +241,9 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         /* Don't feed slaves that are still waiting for BGSAVE to start */
         if (slave->replstate == REDIS_REPL_WAIT_BGSAVE_START) continue;
 
+        /* Don't feed slaves that don't need commands feed */
+        if (slave->flags & REDIS_SLAVE_NOBUF) continue;
+
         /* Feed slaves that are waiting for the initial SYNC (so these commands
          * are queued in the output buffer until the initial SYNC completes),
          * or are already in sync with the master. */
@@ -477,7 +480,7 @@ void syncnowCommand(redisClient *c) {
 
     c->replstate = REDIS_REPL_WAIT_BGSAVE_END;
     c->repldbfd = -1;
-    c->flags |= REDIS_SLAVE;
+    c->flags |= REDIS_SLAVE|REDIS_SLAVE_NOBUF;
     c->slaveseldb = 0;
     listAddNodeTail(server.slaves,c);
 
@@ -695,6 +698,10 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
             freeClient(slave);
             return;
         }
+
+        if (slave->flags & REDIS_SLAVE_NOBUF)
+            freeClientAsync(slave);
+
         refreshGoodSlavesCount();
         redisLog(REDIS_NOTICE,"Synchronization with slave succeeded");
     }

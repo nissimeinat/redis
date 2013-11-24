@@ -238,6 +238,7 @@
 #define REDIS_FORCE_REPL (1<<15)  /* Force replication of current cmd. */
 #define REDIS_PRE_PSYNC_SLAVE (1<<16) /* Slave don't understand PSYNC. */
 #define REDIS_HIDDEN (1<<17)    /* Client is hidden, won't show up in MONITOR */
+#define REDIS_SLAVE_NOBUF (1<<18)   /* Don't buffer commands for this slave */
 
 /* Client request types */
 #define REDIS_REQ_INLINE 1
