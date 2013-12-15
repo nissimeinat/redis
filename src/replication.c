@@ -784,6 +784,31 @@ void replicationAbortSyncTransfer(void) {
     server.repl_state = REDIS_REPL_CONNECT;
 }
 
+/* Avoid the master to detect the slave is timing out while loading the
+ * RDB file in initial synchronization. We send a single newline character
+ * that is valid protocol but is guaranteed to either be sent entierly or
+ * not, since the byte is indivisible.
+ *
+ * The function is called in two contexts: while we flush the current
+ * data with emptyDb(), and while we load the new data received as an
+ * RDB file from the master. */
+void replicationSendNewlineToMaster(void) {
+    static time_t newline_sent;
+    if (time(NULL) != newline_sent) {
+        newline_sent = time(NULL);
+        if (write(server.repl_transfer_s,"\n",1) == -1) {
+            /* Pinging back in this stage is best-effort. */
+        }
+    }
+}
+
+/* Callback used by emptyDb() while flushing away old data to load
+ * the new dataset received by the master. */
+void replicationEmptyDbCallback(void *privdata) {
+    REDIS_NOTUSED(privdata);
+    replicationSendNewlineToMaster();
+}
+
 /* Asynchronously read the SYNC payload we receive from a master */
 #define REPL_MAX_WRITTEN_BEFORE_FSYNC (1024*1024*8) /* 8 MB */
 void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
@@ -863,15 +888,16 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
             replicationAbortSyncTransfer();
             return;
         }
-        redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Loading DB in memory");
+        redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Flushing old data");
         signalFlushedDb(-1);
-        emptyDb();
+        emptyDb(replicationEmptyDbCallback);
         scriptingReset();
         /* Before loading the DB into memory we need to delete the readable
          * handler, otherwise it will get called recursively since
          * rdbLoad() will call the event loop to process events from time to
          * time for non blocking loading. */
         aeDeleteFileEvent(server.el,server.repl_transfer_s,AE_READABLE);
+        redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Loading DB in memory");
         if (rdbLoad(server.rdb_filename) != REDIS_OK) {
             redisLog(REDIS_WARNING,"Failed trying to load the MASTER synchronization DB from disk");
             replicationAbortSyncTransfer();
@@ -1289,16 +1315,35 @@ int cancelReplicationHandshake(void) {
     return 1;
 }
 
+/* Set replication to the specified master address and port. */
+void replicationSetMaster(char *ip, int port) {
+    sdsfree(server.masterhost);
+    server.masterhost = sdsdup(ip);
+    server.masterport = port;
+    if (server.master) freeClient(server.master);
+    disconnectSlaves(); /* Force our slaves to resync with us as well. */
+    replicationDiscardCachedMaster(); /* Don't try a PSYNC. */
+    freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
+    cancelReplicationHandshake();
+    server.repl_state = REDIS_REPL_CONNECT;
+}
+
+/* Cancel replication, setting the instance as a master itself. */
+void replicationUnsetMaster(void) {
+    if (server.masterhost == NULL) return; /* Nothing to do. */
+    sdsfree(server.masterhost);
+    server.masterhost = NULL;
+    if (server.master) freeClient(server.master);
+    replicationDiscardCachedMaster();
+    cancelReplicationHandshake();
+    server.repl_state = REDIS_REPL_NONE;
+}
+
 void slaveofCommand(redisClient *c) {
     if (!strcasecmp(c->argv[1]->ptr,"no") &&
         !strcasecmp(c->argv[2]->ptr,"one")) {
         if (server.masterhost) {
-            sdsfree(server.masterhost);
-            server.masterhost = NULL;
-            if (server.master) freeClient(server.master);
-            replicationDiscardCachedMaster();
-            cancelReplicationHandshake();
-            server.repl_state = REDIS_REPL_NONE;
+            replicationUnsetMaster();
             redisLog(REDIS_NOTICE,"MASTER MODE enabled (user request)");
         }
     } else {
@@ -1316,15 +1361,7 @@ void slaveofCommand(redisClient *c) {
         }
         /* There was no previous master or the user specified a different one,
          * we can continue. */
-        sdsfree(server.masterhost);
-        server.masterhost = sdsdup(c->argv[1]->ptr);
-        server.masterport = port;
-        if (server.master) freeClient(server.master);
-        disconnectSlaves(); /* Force our slaves to resync with us as well. */
-        replicationDiscardCachedMaster(); /* Don't try a PSYNC. */
-        freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
-        cancelReplicationHandshake();
-        server.repl_state = REDIS_REPL_CONNECT;
+        replicationSetMaster(c->argv[1]->ptr, port);
         redisLog(REDIS_NOTICE,"SLAVE OF %s:%d enabled (user request)",
             server.masterhost, server.masterport);
     }
@@ -1472,7 +1509,7 @@ void refreshGoodSlavesCount(void) {
  * connected slave, in order to be able to replicate EVALSHA as it is without
  * translating it to EVAL every time it is possible.
  *
- * We use a capped collection implemented by an hash table for fast lookup
+ * We use a capped collection implemented by a hash table for fast lookup
  * of scripts we can send as EVALSHA, plus a linked list that is used for
  * eviction of the oldest entry when the max number of items is reached.
  *
@@ -1517,7 +1554,7 @@ void replicationScriptCacheInit(void) {
  *    to reclaim otherwise unused memory.
  */
 void replicationScriptCacheFlush(void) {
-    dictEmpty(server.repl_scriptcache_dict);
+    dictEmpty(server.repl_scriptcache_dict,NULL);
     listRelease(server.repl_scriptcache_fifo);
     server.repl_scriptcache_fifo = listCreate();
 }

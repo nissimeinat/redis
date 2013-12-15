@@ -136,7 +136,7 @@ typedef struct sentinelRedisInstance {
                                  if the link is idle and must be reconnected. */
     mstime_t last_pub_time;   /* Last time we sent hello via Pub/Sub. */
     mstime_t last_hello_time; /* Only used if SRI_SENTINEL is set. Last time
-                                 we received an hello from this Sentinel
+                                 we received a hello from this Sentinel
                                  via Pub/Sub. */
     mstime_t last_master_down_reply_time; /* Time of last reply to
                                              SENTINEL is-master-down command. */
@@ -394,7 +394,7 @@ void initSentinel(void) {
 
     /* Remove usual Redis commands from the command table, then just add
      * the SENTINEL command. */
-    dictEmpty(server.commands);
+    dictEmpty(server.commands,NULL);
     for (j = 0; j < sizeof(sentinelcmds)/sizeof(sentinelcmds[0]); j++) {
         int retval;
         struct redisCommand *cmd = sentinelcmds+j;
@@ -1134,6 +1134,8 @@ void sentinelResetMaster(sentinelRedisInstance *ri, int flags) {
     ri->slave_master_host = NULL;
     ri->last_avail_time = mstime();
     ri->last_pong_time = mstime();
+    ri->role_reported_time = mstime();
+    ri->role_reported = SRI_MASTER;
     if (flags & SENTINEL_GENERATE_EVENT)
         sentinelEvent(REDIS_WARNING,"+reset-master",ri,"%@");
 }
@@ -1475,21 +1477,25 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
  * On failure the function logs a warning on the Redis log. */
 void sentinelFlushConfig(void) {
     int fd;
+    int saved_hz = server.hz;
 
-    if (rewriteConfig(server.configfile) == -1) {
+    server.hz = REDIS_DEFAULT_HZ;
+    if (rewriteConfig(server.configfile) != -1) {
+        /* Rewrite succeded, fsync it. */
+        if ((fd = open(server.configfile,O_RDONLY)) != -1) {
+            fsync(fd);
+            close(fd);
+        }
+    } else {
         redisLog(REDIS_WARNING,"WARNING: Senitnel was not able to save the new configuration on disk!!!: %s", strerror(errno));
-        return;
     }
-    if ((fd = open(server.configfile,O_RDONLY)) != -1) {
-        fsync(fd);
-        close(fd);
-    }
+    server.hz = saved_hz;
     return;
 }
 
 /* ====================== hiredis connection handling ======================= */
 
-/* Completely disconnect an hiredis link from an instance. */
+/* Completely disconnect a hiredis link from an instance. */
 void sentinelKillLink(sentinelRedisInstance *ri, redisAsyncContext *c) {
     if (ri->cc == c) {
         ri->cc = NULL;
@@ -1501,7 +1507,7 @@ void sentinelKillLink(sentinelRedisInstance *ri, redisAsyncContext *c) {
     redisAsyncFree(c);
 }
 
-/* This function takes an hiredis context that is in an error condition
+/* This function takes a hiredis context that is in an error condition
  * and make sure to mark the instance as disconnected performing the
  * cleanup needed.
  *
@@ -1610,9 +1616,8 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
         }
     }
     /* Clear the DISCONNECTED flags only if we have both the connections
-     * (or just the commands connection if this is a slave or a
-     * sentinel instance). */
-    if (ri->cc && (ri->flags & (SRI_SLAVE|SRI_SENTINEL) || ri->pc))
+     * (or just the commands connection if this is a sentinel instance). */
+    if (ri->cc && (ri->flags & SRI_SENTINEL || ri->pc))
         ri->flags &= ~SRI_DISCONNECTED;
 }
 
@@ -1760,22 +1765,22 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
      * Some things will not happen if sentinel.tilt is true, but some will
      * still be processed. */
 
+    /* Remember when the role changed. */
+    if (role != ri->role_reported) {
+        ri->role_reported_time = mstime();
+        ri->role_reported = role;
+        if (role == SRI_SLAVE) ri->slave_conf_change_time = mstime();
+    }
+
     /* Handle master -> slave role switch. */
     if ((ri->flags & SRI_MASTER) && role == SRI_SLAVE) {
-        if (ri->role_reported != SRI_SLAVE) {
-            ri->role_reported_time = mstime();
-            ri->role_reported = SRI_SLAVE;
-            ri->slave_conf_change_time = mstime();
-        }
+        /* Nothing to do, but masters claiming to be slaves are
+         * considered to be unreachable by Sentinel, so eventually
+         * a failover will be triggered. */
     }
 
     /* Handle slave -> master role switch. */
     if ((ri->flags & SRI_SLAVE) && role == SRI_MASTER) {
-        if (ri->role_reported != SRI_MASTER) {
-            ri->role_reported_time = mstime();
-            ri->role_reported = SRI_MASTER;
-        }
-
         /* If this is a promoted slave we can change state to the
          * failover state machine. */
         if (!sentinel.tilt &&
@@ -2028,7 +2033,7 @@ void sentinelReceiveHelloMessages(redisAsyncContext *c, void *reply, void *privd
                 if (msgmaster->config_epoch < master_config_epoch) {
                     msgmaster->config_epoch = master_config_epoch;
                     if (master_port != msgmaster->addr->port ||
-                        !strcmp(msgmaster->addr->ip, token[5]))
+                        strcmp(msgmaster->addr->ip, token[5]))
                     {
                         sentinelAddr *old_addr;
 
@@ -2081,12 +2086,12 @@ int sentinelSendHello(sentinelRedisInstance *ri) {
     /* Format and send the Hello message. */
     snprintf(payload,sizeof(payload),
         "%s,%d,%s,%llu," /* Info about this sentinel. */
-        "%s,%s,%d,%lld", /* Info about current master. */
+        "%s,%s,%d,%llu", /* Info about current master. */
         ip, server.port, server.runid,
         (unsigned long long) sentinel.current_epoch,
         /* --- */
         master->name,master_addr->ip,master_addr->port,
-        master->config_epoch);
+        (unsigned long long) master->config_epoch);
     retval = redisAsyncCommand(ri->cc,
         sentinelPublishReplyCallback, NULL, "PUBLISH %s %s",
             SENTINEL_HELLO_CHANNEL,payload);
@@ -2655,6 +2660,11 @@ void sentinelReceiveIsMasterDownReply(redisAsyncContext *c, void *reply, void *p
             /* If the runid in the reply is not "*" the Sentinel actually
              * replied with a vote. */
             sdsfree(ri->leader);
+            if (ri->leader_epoch != r->element[2]->integer)
+                redisLog(REDIS_WARNING,
+                    "%s voted for %s %llu", ri->name,
+                    r->element[1]->str,
+                    (unsigned long long) r->element[2]->integer);
             ri->leader = sdsnew(r->element[1]->str);
             ri->leader_epoch = r->element[2]->integer;
         }
@@ -2732,12 +2742,9 @@ char *sentinelVoteLeader(sentinelRedisInstance *master, uint64_t req_epoch, char
             master->leader, (unsigned long long) master->leader_epoch);
         /* If we did not voted for ourselves, set the master failover start
          * time to now, in order to force a delay before we can start a
-         * failover for the same master.
-         *
-         * The random addition is useful to desynchronize a bit the slaves
-         * and reduce the chance that no slave gets majority. */
+         * failover for the same master. */
         if (strcasecmp(master->leader,server.runid))
-            master->failover_start_time = mstime() + rand() % 2000;
+            master->failover_start_time = mstime();
     }
 
     *leader_epoch = master->leader_epoch;
@@ -3388,5 +3395,13 @@ void sentinelTimer(void) {
     sentinelRunPendingScripts();
     sentinelCollectTerminatedScripts();
     sentinelKillTimedoutScripts();
+
+    /* We continuously change the frequency of the Redis "timer interrupt"
+     * in order to desynchronize every Sentinel from every other.
+     * This non-determinism avoids that Sentinels started at the same time
+     * exactly continue to stay synchronized asking to be voted at the
+     * same time again and again (resulting in nobody likely winning the
+     * election because of split brain voting). */
+    server.hz = REDIS_DEFAULT_HZ + rand() % REDIS_DEFAULT_HZ;
 }
 

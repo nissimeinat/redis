@@ -492,8 +492,6 @@ typedef struct redisClient {
     int slave_listening_port; /* As configured with: SLAVECONF listening-port */
     multiState mstate;      /* MULTI/EXEC state */
     blockingState bpop;   /* blocking state */
-    list *io_keys;          /* Keys this client is waiting to be loaded from the
-                             * swap file in order to continue. */
     list *watched_keys;     /* Keys WATCHED for MULTI/EXEC CAS */
     dict *pubsub_channels;  /* channels a client is interested in (SUBSCRIBE) */
     list *pubsub_patterns;  /* patterns a client is interested in (SUBSCRIBE) */
@@ -1074,6 +1072,9 @@ void replicationScriptCacheInit(void);
 void replicationScriptCacheFlush(void);
 void replicationScriptCacheAdd(sds sha1);
 int replicationScriptCacheExists(sds sha1);
+void replicationSetMaster(char *ip, int port);
+void replicationUnsetMaster(void);
+void replicationSendNewlineToMaster(void);
 
 /* Generic persistence functions */
 void startLoading(FILE *fp);
@@ -1214,7 +1215,7 @@ void setKey(redisDb *db, robj *key, robj *val);
 int dbExists(redisDb *db, robj *key);
 robj *dbRandomKey(redisDb *db);
 int dbDelete(redisDb *db, robj *key);
-long long emptyDb();
+long long emptyDb(void(callback)(void*));
 int selectDb(redisClient *c, int id);
 void signalModifiedKey(redisDb *db, robj *key);
 void signalFlushedDb(int dbid);

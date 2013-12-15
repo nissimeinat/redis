@@ -374,7 +374,7 @@ void exitFromChild(int retcode) {
 
 /*====================== Hash table type implementation  ==================== */
 
-/* This is an hash table type that uses the SDS dynamic strings library as
+/* This is a hash table type that uses the SDS dynamic strings library as
  * keys and radis objects as values (objects can hold SDS strings,
  * lists, sets). */
 
@@ -1948,11 +1948,14 @@ int processCommand(redisClient *c) {
         }
     }
 
-    /* Don't accept write commands if there are problems persisting on disk. */
+    /* Don't accept write commands if there are problems persisting on disk
+     * and if this is a master instance. */
     if (server.stop_writes_on_bgsave_err &&
         server.saveparamslen > 0
         && server.lastbgsave_status == REDIS_ERR &&
-        c->cmd->flags & REDIS_CMD_WRITE)
+        server.masterhost != NULL &&
+        (c->cmd->flags & REDIS_CMD_WRITE ||
+         c->cmd->proc == pingCommand))
     {
         flagTransaction(c);
         addReply(c, shared.bgsaveerr);
@@ -1960,7 +1963,7 @@ int processCommand(redisClient *c) {
     }
 
     /* Don't accept write commands if there are not enough good slaves and
-     * used configured the min-slaves-to-write option. */
+     * user configured the min-slaves-to-write option. */
     if (server.repl_min_slaves_to_write &&
         server.repl_min_slaves_max_lag &&
         c->cmd->flags & REDIS_CMD_WRITE &&
@@ -2461,6 +2464,13 @@ sds genRedisInfoString(char *section) {
             "role:%s\r\n",
             server.masterhost == NULL ? "master" : "slave");
         if (server.masterhost) {
+            long long slave_repl_offset = 1;
+
+            if (server.master)
+                slave_repl_offset = server.master->reploff;
+            else if (server.cached_master)
+                slave_repl_offset = server.cached_master->reploff;
+
             info = sdscatprintf(info,
                 "master_host:%s\r\n"
                 "master_port:%d\r\n"
@@ -2475,7 +2485,7 @@ sds genRedisInfoString(char *section) {
                 server.master ?
                 ((int)(server.unixtime-server.master->lastinteraction)) : -1,
                 server.repl_state == REDIS_REPL_TRANSFER,
-                server.master ? server.master->reploff : -1
+                slave_repl_offset
             );
 
             if (server.repl_state == REDIS_REPL_TRANSFER) {
