@@ -2643,7 +2643,6 @@ void monitorCommand(redisClient *c) {
     if (c->flags & REDIS_SLAVE) return;
 
     c->flags |= (REDIS_SLAVE|REDIS_MONITOR);
-    c->slaveseldb = 0;
     listAddNodeTail(server.monitors,c);
     addReply(c,shared.ok);
 }
