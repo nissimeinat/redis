@@ -481,8 +481,14 @@ void syncnowCommand(redisClient *c) {
     c->replstate = REDIS_REPL_WAIT_BGSAVE_END;
     c->repldbfd = -1;
     c->flags |= REDIS_SLAVE|REDIS_SLAVE_NOBUF;
-    c->slaveseldb = 0;
+    c->slaveseldb = -1;
     listAddNodeTail(server.slaves,c);
+
+    /* We don't really need a replication backlog for syncnow clients, but we
+     * do want to keep things as the rest of the code exepcts them to be...
+     */
+    if (listLength(server.slaves) == 1 && server.repl_backlog == NULL)
+        createReplicationBacklog();
 
     return;
 }
