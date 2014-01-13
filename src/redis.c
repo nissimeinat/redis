@@ -1317,7 +1317,7 @@ void initServerConfig() {
     server.rdb_autosync_bytes = REDIS_RDB_AUTOSYNC_BYTES;
     server.pidfile = zstrdup(REDIS_DEFAULT_PID_FILE);
     server.rdb_filename = zstrdup(REDIS_DEFAULT_RDB_FILENAME);
-    server.aof_filename = zstrdup("appendonly.aof");
+    server.aof_filename = zstrdup(REDIS_DEFAULT_AOF_FILENAME);
     server.requirepass = NULL;
     server.rdb_compression = REDIS_DEFAULT_RDB_COMPRESSION;
     server.rdb_checksum = REDIS_DEFAULT_RDB_CHECKSUM;
@@ -1545,7 +1545,8 @@ void initServer() {
     server.db = zmalloc(sizeof(redisDb)*server.dbnum);
 
     /* Open the TCP listening socket for the user commands. */
-    if (listenToPort(server.port,server.ipfd,&server.ipfd_count) == REDIS_ERR)
+    if (server.port != 0 &&
+        listenToPort(server.port,server.ipfd,&server.ipfd_count) == REDIS_ERR)
         exit(1);
 
     /* Open the listening Unix domain socket. */

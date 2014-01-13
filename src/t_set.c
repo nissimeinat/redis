@@ -830,6 +830,7 @@ void sunionDiffGenericCommand(redisClient *c, robj **setkeys, int setnum, robj *
             n++;
             for (j = 1; j < setnum; j++) {
                 if (!sets[j]) continue; /* no key is an empty set. */
+                if (sets[j] == sets[0]) break; /* same set! */
                 if (setTypeIsMember(sets[j],ele)) break;
             }
             if (j == setnum) {

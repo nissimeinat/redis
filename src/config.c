@@ -1197,8 +1197,8 @@ void configGetCommand(redisClient *c) {
 /* We use the following dictionary type to store where a configuration
  * option is mentioned in the old configuration file, so it's
  * like "maxmemory" -> list of line numbers (first line is zero). */
-unsigned int dictSdsHash(const void *key);
-int dictSdsKeyCompare(void *privdata, const void *key1, const void *key2);
+unsigned int dictSdsCaseHash(const void *key);
+int dictSdsKeyCaseCompare(void *privdata, const void *key1, const void *key2);
 void dictSdsDestructor(void *privdata, void *val);
 void dictListDestructor(void *privdata, void *val);
 
@@ -1207,17 +1207,27 @@ void dictListDestructor(void *privdata, void *val);
 void rewriteConfigSentinelOption(struct rewriteConfigState *state);
 
 dictType optionToLineDictType = {
-    dictSdsHash,                /* hash function */
+    dictSdsCaseHash,            /* hash function */
     NULL,                       /* key dup */
     NULL,                       /* val dup */
-    dictSdsKeyCompare,          /* key compare */
+    dictSdsKeyCaseCompare,      /* key compare */
     dictSdsDestructor,          /* key destructor */
     dictListDestructor          /* val destructor */
+};
+
+dictType optionSetDictType = {
+    dictSdsCaseHash,            /* hash function */
+    NULL,                       /* key dup */
+    NULL,                       /* val dup */
+    dictSdsKeyCaseCompare,      /* key compare */
+    dictSdsDestructor,          /* key destructor */
+    NULL                        /* val destructor */
 };
 
 /* The config rewrite state. */
 struct rewriteConfigState {
     dict *option_to_line; /* Option -> list of config file lines map */
+    dict *rewritten;      /* Dictionary of already processed options */
     int numlines;         /* Number of lines in current config */
     sds *lines;           /* Current lines as an array of sds strings */
     int has_tail;         /* True if we already added directives that were
@@ -1241,6 +1251,16 @@ void rewriteConfigAddLineNumberToOption(struct rewriteConfigState *state, sds op
     listAddNodeTail(l,(void*)(long)linenum);
 }
 
+/* Add the specified option to the set of processed options.
+ * This is useful as only unused lines of processed options will be blanked
+ * in the config file, while options the rewrite process does not understand
+ * remain untouched. */
+void rewriteConfigMarkAsProcessed(struct rewriteConfigState *state, char *option) {
+    sds opt = sdsnew(option);
+
+    if (dictAdd(state->rewritten,opt,NULL) != DICT_OK) sdsfree(opt);
+}
+
 /* Read the old file, split it into lines to populate a newly created
  * config rewrite state, and return it to the caller.
  *
@@ -1255,6 +1275,7 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
     if (fp == NULL && errno != ENOENT) return NULL;
 
     state->option_to_line = dictCreate(&optionToLineDictType,NULL);
+    state->rewritten = dictCreate(&optionSetDictType,NULL);
     state->numlines = 0;
     state->lines = NULL;
     state->has_tail = 0;
@@ -1322,6 +1343,8 @@ void rewriteConfigRewriteLine(struct rewriteConfigState *state, char *option, sd
     sds o = sdsnew(option);
     list *l = dictFetchValue(state->option_to_line,o);
 
+    rewriteConfigMarkAsProcessed(state,option);
+
     if (!l && !force) {
         /* Option not used previously, and we are not forced to use it. */
         sdsfree(line);
@@ -1378,7 +1401,6 @@ void rewriteConfigBytesOption(struct rewriteConfigState *state, char *option, lo
     rewriteConfigFormatMemory(buf,sizeof(buf),value);
     line = sdscatprintf(sdsempty(),"%s %s",option,buf);
     rewriteConfigRewriteLine(state,option,line,force);
-
 }
 
 /* Rewrite a yes/no option. */
@@ -1397,7 +1419,10 @@ void rewriteConfigStringOption(struct rewriteConfigState *state, char *option, c
 
     /* String options set to NULL need to be not present at all in the
      * configuration file to be set to NULL again at the next reboot. */
-    if (value == NULL) return;
+    if (value == NULL) {
+        rewriteConfigMarkAsProcessed(state,option);
+        return;
+    }
 
     /* Compare the strings as sds strings to have a binary safe comparison. */
     if (defvalue && strcmp(value,defvalue) == 0) force = 0;
@@ -1481,13 +1506,18 @@ void rewriteConfigSaveOption(struct rewriteConfigState *state) {
             server.saveparams[j].seconds, server.saveparams[j].changes);
         rewriteConfigRewriteLine(state,"save",line,1);
     }
+    /* Mark "save" as processed in case server.saveparamslen is zero. */
+    rewriteConfigMarkAsProcessed(state,"save");
 }
 
 /* Rewrite the dir option, always using absolute paths.*/
 void rewriteConfigDirOption(struct rewriteConfigState *state) {
     char cwd[1024];
 
-    if (getcwd(cwd,sizeof(cwd)) == NULL) return; /* no rewrite on error. */
+    if (getcwd(cwd,sizeof(cwd)) == NULL) {
+        rewriteConfigMarkAsProcessed(state,"dir");
+        return; /* no rewrite on error. */
+    }
     rewriteConfigStringOption(state,"dir",cwd,NULL);
 }
 
@@ -1498,21 +1528,13 @@ void rewriteConfigSlaveofOption(struct rewriteConfigState *state) {
 
     /* If this is a master, we want all the slaveof config options
      * in the file to be removed. */
-    if (server.masterhost == NULL) return;
+    if (server.masterhost == NULL) {
+        rewriteConfigMarkAsProcessed(state,"slaveof");
+        return;
+    }
     line = sdscatprintf(sdsempty(),"%s %s %d", option,
         server.masterhost, server.masterport);
     rewriteConfigRewriteLine(state,option,line,1);
-}
-
-/* Rewrite the appendonly option. */
-void rewriteConfigAppendonlyOption(struct rewriteConfigState *state) {
-    int force = server.aof_state != REDIS_AOF_OFF;
-    char *option = "appendonly";
-    sds line;
-
-    line = sdscatprintf(sdsempty(),"%s %s", option,
-        (server.aof_state == REDIS_AOF_OFF) ? "no" : "yes");
-    rewriteConfigRewriteLine(state,option,line,force);
 }
 
 /* Rewrite the notify-keyspace-events option. */
@@ -1563,7 +1585,10 @@ void rewriteConfigBindOption(struct rewriteConfigState *state) {
     char *option = "bind";
 
     /* Nothing to rewrite if we don't have bind addresses. */
-    if (server.bindaddr_count == 0) return;
+    if (server.bindaddr_count == 0) {
+        rewriteConfigMarkAsProcessed(state,option);
+        return;
+    }
 
     /* Rewrite as bind <addr1> <addr2> ... <addrN> */
     addresses = sdsjoin(server.bindaddr,server.bindaddr_count," ");
@@ -1599,6 +1624,7 @@ sds rewriteConfigGetContentFromState(struct rewriteConfigState *state) {
 void rewriteConfigReleaseState(struct rewriteConfigState *state) {
     sdsfreesplitres(state->lines,state->numlines);
     dictRelease(state->option_to_line);
+    dictRelease(state->rewritten);
     zfree(state);
 }
 
@@ -1616,6 +1642,14 @@ void rewriteConfigRemoveOrphaned(struct rewriteConfigState *state) {
 
     while((de = dictNext(di)) != NULL) {
         list *l = dictGetVal(de);
+        sds option = dictGetKey(de);
+
+        /* Don't blank lines about options the rewrite process
+         * don't understand. */
+        if (dictFind(state->rewritten,option) == NULL) {
+            redisLog(REDIS_DEBUG,"Not rewritten option: %s", option);
+            continue;
+        }
 
         while(listLength(l)) {
             listNode *ln = listFirst(l);
@@ -1722,7 +1756,6 @@ int rewriteConfig(char *path) {
 
     /* TODO: Turn every default into a define, use it also in
      * initServerConfig(). */
-
     rewriteConfigYesNoOption(state,"daemonize",server.daemonize,0);
     rewriteConfigStringOption(state,"pidfile",server.pidfile,REDIS_DEFAULT_PID_FILE);
     rewriteConfigNumericalOption(state,"port",server.port,REDIS_SERVERPORT);
@@ -1758,6 +1791,8 @@ int rewriteConfig(char *path) {
     rewriteConfigBytesOption(state,"repl-backlog-ttl",server.repl_backlog_time_limit,REDIS_DEFAULT_REPL_BACKLOG_TIME_LIMIT);
     rewriteConfigYesNoOption(state,"repl-disable-tcp-nodelay",server.repl_disable_tcp_nodelay,REDIS_DEFAULT_REPL_DISABLE_TCP_NODELAY);
     rewriteConfigNumericalOption(state,"slave-priority",server.slave_priority,REDIS_DEFAULT_SLAVE_PRIORITY);
+    rewriteConfigNumericalOption(state,"min-slaves-to-write",server.repl_min_slaves_to_write,REDIS_DEFAULT_MIN_SLAVES_TO_WRITE);
+    rewriteConfigNumericalOption(state,"min-slaves-max-lag",server.repl_min_slaves_max_lag,REDIS_DEFAULT_MIN_SLAVES_MAX_LAG);
     rewriteConfigStringOption(state,"requirepass",server.requirepass,NULL);
     rewriteConfigNumericalOption(state,"maxclients",server.maxclients,REDIS_MAX_CLIENTS);
     rewriteConfigBytesOption(state,"maxmemory",server.maxmemory,REDIS_DEFAULT_MAXMEMORY);
@@ -1770,7 +1805,8 @@ int rewriteConfig(char *path) {
         "noeviction", REDIS_MAXMEMORY_NO_EVICTION,
         NULL, REDIS_DEFAULT_MAXMEMORY_POLICY);
     rewriteConfigNumericalOption(state,"maxmemory-samples",server.maxmemory_samples,REDIS_DEFAULT_MAXMEMORY_SAMPLES);
-    rewriteConfigAppendonlyOption(state);
+    rewriteConfigYesNoOption(state,"appendonly",server.aof_state != REDIS_AOF_OFF,0);
+    rewriteConfigStringOption(state,"appendfilename",server.aof_filename,REDIS_DEFAULT_AOF_FILENAME);
     rewriteConfigEnumOption(state,"appendfsync",server.aof_fsync,
         "everysec", AOF_FSYNC_EVERYSEC,
         "always", AOF_FSYNC_ALWAYS,
