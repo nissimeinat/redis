@@ -45,8 +45,6 @@ extern char **environ;
 
 /* ======================== Sentinel global state =========================== */
 
-typedef long long mstime_t; /* millisecond time type. */
-
 /* Address object, used to describe an ip:port pair. */
 typedef struct sentinelAddr {
     char *ip;
@@ -2387,6 +2385,7 @@ void sentinelCommand(redisClient *c) {
         /* SENTINEL MASTER <name> */
         sentinelRedisInstance *ri;
 
+        if (c->argc != 3) goto numargserr;
         if ((ri = sentinelGetMasterByNameOrReplyError(c,c->argv[2]))
             == NULL) return;
         addReplySentinelRedisInstance(c,ri);
@@ -2669,6 +2668,12 @@ void sentinelSetCommand(redisClient *c) {
             /* auth-pass <password> */
             sdsfree(ri->auth_pass);
             ri->auth_pass = strlen(value) ? sdsnew(value) : NULL;
+            changes++;
+       } else if (!strcasecmp(option,"quorum")) {
+            /* quorum <count> */
+            if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll <= 0)
+                goto badfmt;
+            ri->quorum = ll;
             changes++;
         } else {
             addReplyErrorFormat(c,"Unknown option '%s' for SENTINEL SET",

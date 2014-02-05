@@ -265,7 +265,7 @@ t_zset.o: ../t_zset.c ../redis.h ../fmacros.h ../config.h \
  /home/yossi/projects/redis/src/../deps/jemalloc/obj.x86_64/include/jemalloc/jemalloc.h \
  /home/yossi/projects/redis/src/../deps/jemalloc/obj.x86_64/include/jemalloc/jemalloc_defs.h \
  ../anet.h ../ziplist.h ../intset.h ../version.h ../util.h ../rdb.h \
- ../rio.h
+ ../rio.h ../slowlog.h
 util.o: ../util.c ../fmacros.h ../util.h ../sds.h
 ziplist.o: ../ziplist.c ../zmalloc.h \
  /home/yossi/projects/redis/src/../deps/jemalloc/obj.x86_64/include/jemalloc/jemalloc.h \

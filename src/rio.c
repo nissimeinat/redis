@@ -85,8 +85,10 @@ static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
         size_t bytes_to_write = (r->io.file.autosync && r->io.file.autosync < len) ? r->io.file.autosync : len;
         if (fwrite((char*)buf + bytes_written,bytes_to_write,1,r->io.file.fp) != 1)
             return 0;
-        if (r->io.file.autosync && (r->processed_bytes + bytes_written)/r->io.file.autosync < (r->processed_bytes + bytes_written + bytes_to_write)/r->io.file.autosync)
+        if (r->io.file.autosync && (r->processed_bytes + bytes_written)/r->io.file.autosync < (r->processed_bytes + bytes_written + bytes_to_write)/r->io.file.autosync) {
+            fflush(r->io.file.fp);
             fsync(fileno(r->io.file.fp));
+        }
         bytes_written += bytes_to_write;
         len -= bytes_to_write;
     }

@@ -71,6 +71,7 @@
 #define REDIS_MIN_HZ            1
 #define REDIS_MAX_HZ            500 
 #define REDIS_SERVERPORT        6379    /* TCP port */
+#define REDIS_TCP_BACKLOG       511     /* TCP listen backlog */
 #define REDIS_MAXIDLETIME       0       /* default client timeout: infinite */
 #define REDIS_DEFAULT_DBNUM     16
 #define REDIS_CONFIGLINE_MAX    1024
@@ -81,7 +82,7 @@
 #define REDIS_SHARED_BULKHDR_LEN 32
 #define REDIS_MAX_LOGMSG_LEN    1024 /* Default maximum length of syslog messages */
 #define REDIS_AOF_REWRITE_PERC  100
-#define REDIS_AOF_REWRITE_MIN_SIZE (1024*1024)
+#define REDIS_AOF_REWRITE_MIN_SIZE (64*1024*1024)
 #define REDIS_AOF_REWRITE_ITEMS_PER_CMD 64
 #define REDIS_SLOWLOG_LOG_SLOWER_THAN 10000
 #define REDIS_SLOWLOG_MAX_LEN 128
@@ -382,6 +383,8 @@
  * Data types
  *----------------------------------------------------------------------------*/
 
+typedef long long mstime_t; /* millisecond time type. */
+
 /* A redis object, that is a type able to hold a string / list / set */
 
 /* The actual Redis Object */
@@ -606,6 +609,7 @@ struct redisServer {
     int sentinel_mode;          /* True if this instance is a Sentinel. */
     /* Networking */
     int port;                   /* TCP listening port */
+    int tcp_backlog;            /* TCP listen() backlog */
     char *bindaddr[REDIS_BINDADDR_MAX]; /* Addresses we should bind to */
     int bindaddr_count;         /* Number of addresses in server.bindaddr[] */
     char *unixsocket;           /* UNIX socket path */
@@ -806,8 +810,8 @@ struct redisServer {
     redisClient *lua_client;   /* The "fake client" to query Redis from Lua */
     redisClient *lua_caller;   /* The client running EVAL right now, or NULL */
     dict *lua_scripts;         /* A dictionary of SHA1 -> Lua scripts */
-    long long lua_time_limit;  /* Script timeout in seconds */
-    long long lua_time_start;  /* Start time of script */
+    mstime_t lua_time_limit;  /* Script timeout in milliseconds */
+    mstime_t lua_time_start;  /* Start time of script, milliseconds time */
     int lua_write_dirty;  /* True if a write command was called during the
                              execution of the current script. */
     int lua_random_dirty; /* True if a random command was called during the
