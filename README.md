@@ -187,5 +187,5 @@ Will (by default) result with a /usr/local/bin/redis-server 64-bit version
 and a /usr/local/bin/redis-server.i686 32-bit version.
 
 
-[![githalytics.com alpha](https://cruel-carlota.pagodabox.com/ce4c1161c17a84e88ed541d89e4edf5f "githalytics.com")](http://githalytics.com/GarantiaData/redis)
+[![githalytics.com alpha](https://cruel-carlota.pagodabox.com/354cdaba06ccafd146a22c3b1d61b2e9 "githalytics.com")](http://githalytics.com/RedisLabs/redis)
 
