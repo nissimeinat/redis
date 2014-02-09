@@ -1,4 +1,4 @@
-This is the Garantia Data custom Redis version, which is based on the publicly
+This is the Redis Labs (formerly Garantia Data) custom Redis version, which is based on the publicly
 available Redis 2.6 with various additional features we use internally.
 
 This file provides some high-level documentation of the additional features.
