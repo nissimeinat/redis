@@ -958,6 +958,15 @@ void databasesCron(void) {
     }
 }
 
+/* We take a cached value of the unix time in the global state because with
+ * virtual memory and aging there is to store the current time in objects at
+ * every object access, and accuracy is not needed. To access a global var is
+ * a lot faster than calling time(NULL) */
+void updateCachedTime(void) {
+    server.unixtime = time(NULL);
+    server.mstime = mstime();
+}
+
 /* This is our timer interrupt, called server.hz times per second.
  * Here is where we do a number of things that need to be done asynchronously.
  * For instance:
@@ -987,12 +996,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * handler if we don't return here fast enough. */
     if (server.watchdog_period) watchdogScheduleSignal(server.watchdog_period);
 
-    /* We take a cached value of the unix time in the global state because
-     * with virtual memory and aging there is to store the current time
-     * in objects at every object access, and accuracy is not needed.
-     * To access a global var is faster than calling time(NULL) */
-    server.unixtime = time(NULL);
-    server.mstime = mstime();
+    /* Update the time cache. */
+    updateCachedTime();
 
     run_with_period(100) trackOperationsPerSecond();
 
@@ -1128,9 +1133,18 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
 
-    /* If we postponed an AOF buffer flush, let's try to do it every time the
-     * cron function is called. */
+    /* AOF postponed flush: Try at every cron cycle if the slow fsync
+     * completed. */
     if (server.aof_flush_postponed_start) flushAppendOnlyFile(0);
+
+    /* AOF write errors: in this case we have a buffer to flush as well and
+     * clear the AOF error in case of success to make the DB writable again,
+     * however to try every second is enough in case of 'hz' is set to
+     * an higher frequency. */
+    run_with_period(1000) {
+        if (server.aof_last_write_status == REDIS_ERR)
+            flushAppendOnlyFile(0);
+    }
 
     /* Close clients that need to be closed asynchronous */
     freeClientsInAsyncFreeQueue();
@@ -1616,10 +1630,11 @@ void initServer() {
     server.ops_sec_idx = 0;
     server.ops_sec_last_sample_time = mstime();
     server.ops_sec_last_sample_ops = 0;
-    server.unixtime = time(NULL);
-    server.mstime = mstime();
     server.lastbgsave_status = REDIS_OK;
+    server.aof_last_write_status = REDIS_OK;
+    server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
+    updateCachedTime();
 
     /* Create the serverCron() time event, that's our main way to process
      * background operations. */
@@ -1818,7 +1833,7 @@ void forceCommandPropagation(redisClient *c, int flags) {
 
 /* Call() is the core of Redis execution of a command */
 void call(redisClient *c, int flags) {
-    long long dirty, start = ustime(), duration;
+    long long dirty, start, duration;
     int client_old_flags = c->flags;
 
     /* Sent the command to clients in MONITOR mode, only if the commands are
@@ -1837,9 +1852,10 @@ void call(redisClient *c, int flags) {
     c->flags &= ~(REDIS_FORCE_AOF|REDIS_FORCE_REPL);
     redisOpArrayInit(&server.also_propagate);
     dirty = server.dirty;
+    start = ustime();
     c->cmd->proc(c);
-    dirty = server.dirty-dirty;
     duration = ustime()-start;
+    dirty = server.dirty-dirty;
 
     /* When EVAL is called loading the AOF we don't want commands called
      * from Lua to go into the slowlog or to populate statistics. */
@@ -1957,15 +1973,22 @@ int processCommand(redisClient *c) {
 
     /* Don't accept write commands if there are problems persisting on disk
      * and if this is a master instance. */
-    if (server.stop_writes_on_bgsave_err &&
-        server.saveparamslen > 0
-        && server.lastbgsave_status == REDIS_ERR &&
+    if (((server.stop_writes_on_bgsave_err &&
+          server.saveparamslen > 0 &&
+          server.lastbgsave_status == REDIS_ERR) ||
+          server.aof_last_write_status == REDIS_ERR) &&
         server.masterhost == NULL &&
         (c->cmd->flags & REDIS_CMD_WRITE ||
          c->cmd->proc == pingCommand))
     {
         flagTransaction(c);
-        addReply(c, shared.bgsaveerr);
+        if (server.aof_last_write_status == REDIS_OK)
+            addReply(c, shared.bgsaveerr);
+        else
+            addReplySds(c,
+                sdscatprintf(sdsempty(),
+                "-MISCONF Errors writing to the AOF file: %s\r\n",
+                strerror(server.aof_last_write_errno)));
         return REDIS_OK;
     }
 
@@ -2120,7 +2143,8 @@ int prepareForShutdown(int flags) {
     }
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
-    redisLog(REDIS_WARNING,"Redis is now ready to exit, bye bye...");
+    redisLog(REDIS_WARNING,"%s is now ready to exit, bye bye...",
+        server.sentinel_mode ? "Sentinel" : "Redis");
     return REDIS_OK;
 }
 
@@ -2355,7 +2379,8 @@ sds genRedisInfoString(char *section) {
             "aof_last_rewrite_time_sec:%jd\r\n"
             "aof_current_rewrite_time_sec:%jd\r\n"
             "aof_last_bgrewrite_status:%s\r\n"
-            "aof_rewrites:%lld\r\n",
+            "aof_rewrites:%lld\r\n"
+            "aof_last_write_status:%s\r\n",
             server.loading,
             server.dirty,
             server.rdb_child_pid != -1,
@@ -2372,7 +2397,8 @@ sds genRedisInfoString(char *section) {
             (intmax_t)((server.aof_child_pid == -1) ?
                 -1 : time(NULL)-server.aof_rewrite_time_start),
             (server.aof_lastbgrewrite_status == REDIS_OK) ? "ok" : "err",
-            server.stat_aof_rewrites);
+            server.stat_aof_rewrites,
+            (server.aof_last_write_status == REDIS_OK) ? "ok" : "err");
 
         if (server.aof_state != REDIS_AOF_OFF) {
             info = sdscatprintf(info,
