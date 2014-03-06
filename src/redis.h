@@ -1401,6 +1401,7 @@ void scriptCommand(redisClient *c);
 void timeCommand(redisClient *c);
 void bitopCommand(redisClient *c);
 void bitcountCommand(redisClient *c);
+void bitposCommand(redisClient *c);
 void replconfCommand(redisClient *c);
 
 #if defined(__GNUC__)

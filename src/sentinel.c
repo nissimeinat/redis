@@ -79,12 +79,13 @@ typedef struct sentinelAddr {
 #define SENTINEL_TILT_TRIGGER 2000
 #define SENTINEL_TILT_PERIOD (SENTINEL_PING_PERIOD*30)
 #define SENTINEL_DEFAULT_SLAVE_PRIORITY 100
-#define SENTINEL_SLAVE_RECONF_RETRY_PERIOD 10000
+#define SENTINEL_SLAVE_RECONF_TIMEOUT 10000
 #define SENTINEL_DEFAULT_PARALLEL_SYNCS 1
 #define SENTINEL_MIN_LINK_RECONNECT_PERIOD 15000
 #define SENTINEL_DEFAULT_FAILOVER_TIMEOUT (60*3*1000)
 #define SENTINEL_MAX_PENDING_COMMANDS 100
 #define SENTINEL_ELECTION_TIMEOUT 10000
+#define SENTINEL_MAX_DESYNC 1000
 
 /* Failover machine different states. */
 #define SENTINEL_FAILOVER_STATE_NONE 0  /* No failover in progress. */
@@ -328,6 +329,7 @@ void sentinelDiscardReplyCallback(redisAsyncContext *c, void *reply, void *privd
 int sentinelSendSlaveOf(sentinelRedisInstance *ri, char *host, int port);
 char *sentinelVoteLeader(sentinelRedisInstance *master, uint64_t req_epoch, char *req_runid, uint64_t *leader_epoch);
 void sentinelFlushConfig(void);
+void sentinelGenerateInitialMonitorEvents(void);
 
 /* ========================= Dictionary types =============================== */
 
@@ -418,10 +420,20 @@ void initSentinel(void) {
 void sentinelIsRunning(void) {
     redisLog(REDIS_WARNING,"Sentinel runid is %s", server.runid);
 
-    if (server.configfile == NULL || access(server.configfile,W_OK) == -1) {
-        redisLog(REDIS_WARNING,"Sentinel started without a config file, or config file not writable. Exiting...");
+    if (server.configfile == NULL) {
+        redisLog(REDIS_WARNING,
+            "Sentinel started without a config file. Exiting...");
+        exit(1);
+    } else if (access(server.configfile,W_OK) == -1) {
+        redisLog(REDIS_WARNING,
+            "Sentinel config file %s is not writable: %s. Exiting...",
+            server.configfile,strerror(errno));
         exit(1);
     }
+
+    /* We want to generate a +monitor event for every configured master
+     * at startup. */
+    sentinelGenerateInitialMonitorEvents();
 }
 
 /* ============================== sentinelAddr ============================== */
@@ -551,6 +563,22 @@ void sentinelEvent(int level, char *type, sentinelRedisInstance *ri,
                 type,msg,NULL);
         }
     }
+}
+
+/* This function is called only at startup and is used to generate a
+ * +monitor event for every configured master. The same events are also
+ * generated when a master to monitor is added at runtime via the
+ * SENTINEL MONITOR command. */
+void sentinelGenerateInitialMonitorEvents(void) {
+    dictIterator *di;
+    dictEntry *de;
+
+    di = dictGetIterator(sentinel.masters);
+    while((de = dictNext(di)) != NULL) {
+        sentinelRedisInstance *ri = dictGetVal(de);
+        sentinelEvent(REDIS_WARNING,"+monitor",ri,"%@ quorum %d",ri->quorum);
+    }
+    dictReleaseIterator(di);
 }
 
 /* ============================ script execution ============================ */
@@ -1766,6 +1794,14 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
         ri->role_reported_time = mstime();
         ri->role_reported = role;
         if (role == SRI_SLAVE) ri->slave_conf_change_time = mstime();
+        /* Log the event with +role-change if the new role is coherent or
+         * with -role-change if there is a mismatch with the current config. */
+        sentinelEvent(REDIS_VERBOSE,
+            ((ri->flags & (SRI_MASTER|SRI_SLAVE)) == role) ?
+            "+role-change" : "-role-change",
+            ri, "%@ new reported role is %s",
+            role == SRI_MASTER ? "master" : "slave",
+            ri->flags & SRI_MASTER ? "master" : "slave");
     }
 
     /* Handle master -> slave role switch. */
@@ -2456,8 +2492,6 @@ void sentinelCommand(redisClient *c) {
         ri = sentinelGetMasterByName(c->argv[2]->ptr);
         if (ri == NULL) {
             addReply(c,shared.nullmultibulk);
-        } else if (ri->info_refresh == 0) {
-            addReplySds(c,sdsnew("-IDONTKNOW I have not enough information to reply. Please ask another Sentinel.\r\n"));
         } else {
             sentinelAddr *addr = sentinelGetCurrentMasterAddress(ri);
 
@@ -2492,6 +2526,7 @@ void sentinelCommand(redisClient *c) {
         sentinelPendingScriptsCommand(c);
     } else if (!strcasecmp(c->argv[1]->ptr,"monitor")) {
         /* SENTINEL MONITOR <name> <ip> <port> <quorum> */
+        sentinelRedisInstance *ri;
         long quorum, port;
         char buf[32];
 
@@ -2507,9 +2542,11 @@ void sentinelCommand(redisClient *c) {
             addReplyError(c,"Invalid IP address specified");
             return;
         }
-        if (createSentinelRedisInstance(c->argv[2]->ptr,SRI_MASTER,
-                c->argv[3]->ptr,port,quorum,NULL) == NULL)
-        {
+
+        /* Parameters are valid. Try to create the master instance. */
+        ri = createSentinelRedisInstance(c->argv[2]->ptr,SRI_MASTER,
+                c->argv[3]->ptr,port,quorum,NULL);
+        if (ri == NULL) {
             switch(errno) {
             case EBUSY:
                 addReplyError(c,"Duplicated master name");
@@ -2523,6 +2560,7 @@ void sentinelCommand(redisClient *c) {
             }
         } else {
             sentinelFlushConfig();
+            sentinelEvent(REDIS_WARNING,"+monitor",ri,"%@ quorum %d",ri->quorum);
             addReply(c,shared.ok);
         }
     } else if (!strcasecmp(c->argv[1]->ptr,"remove")) {
@@ -2531,6 +2569,7 @@ void sentinelCommand(redisClient *c) {
 
         if ((ri = sentinelGetMasterByNameOrReplyError(c,c->argv[2]))
             == NULL) return;
+        sentinelEvent(REDIS_WARNING,"-monitor",ri,"%@");
         dictDelete(sentinel.masters,c->argv[2]->ptr);
         sentinelFlushConfig();
         addReply(c,shared.ok);
@@ -2682,6 +2721,7 @@ void sentinelSetCommand(redisClient *c) {
             if (changes) sentinelFlushConfig();
             return;
         }
+        sentinelEvent(REDIS_WARNING,"+set",ri,"%@ %s %s",option,value);
     }
 
     if (changes) sentinelFlushConfig();
@@ -2905,7 +2945,7 @@ char *sentinelVoteLeader(sentinelRedisInstance *master, uint64_t req_epoch, char
          * time to now, in order to force a delay before we can start a
          * failover for the same master. */
         if (strcasecmp(master->leader,server.runid))
-            master->failover_start_time = mstime();
+            master->failover_start_time = mstime()+rand()%SENTINEL_MAX_DESYNC;
     }
 
     *leader_epoch = master->leader_epoch;
@@ -3050,7 +3090,7 @@ void sentinelStartFailover(sentinelRedisInstance *master) {
     sentinelEvent(REDIS_WARNING,"+new-epoch",master,"%llu",
         (unsigned long long) sentinel.current_epoch);
     sentinelEvent(REDIS_WARNING,"+try-failover",master,"%@");
-    master->failover_start_time = mstime();
+    master->failover_start_time = mstime()+rand()%SENTINEL_MAX_DESYNC;
     master->failover_state_change_time = mstime();
 }
 
@@ -3360,14 +3400,17 @@ void sentinelFailoverReconfNextSlave(sentinelRedisInstance *master) {
         /* Skip the promoted slave, and already configured slaves. */
         if (slave->flags & (SRI_PROMOTED|SRI_RECONF_DONE)) continue;
 
-        /* Clear the SRI_RECONF_SENT flag if too much time elapsed without
-         * the slave moving forward to the next state. */
+        /* If too much time elapsed without the slave moving forward to
+         * the next state, consider it reconfigured even if it is not.
+         * Sentinels will detect the slave as misconfigured and fix its
+         * configuration later. */
         if ((slave->flags & SRI_RECONF_SENT) &&
             (mstime() - slave->slave_reconf_sent_time) >
-            SENTINEL_SLAVE_RECONF_RETRY_PERIOD)
+            SENTINEL_SLAVE_RECONF_TIMEOUT)
         {
             sentinelEvent(REDIS_NOTICE,"-slave-reconf-sent-timeout",slave,"%@");
             slave->flags &= ~SRI_RECONF_SENT;
+            slave->flags |= SRI_RECONF_DONE;
         }
 
         /* Nothing to do for instances that are disconnected or already

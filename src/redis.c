@@ -261,6 +261,7 @@ struct redisCommand redisCommandTable[] = {
     {"time",timeCommand,1,"rR",0,NULL,0,0,0,0,0},
     {"bitop",bitopCommand,-4,"wm",0,NULL,2,-1,1,0,0},
     {"bitcount",bitcountCommand,-2,"r",0,NULL,1,1,1,0,0},
+    {"bitpos",bitposCommand,-3,"r",0,NULL,1,1,1,0,0},
     {"hideconnection",hideconnectionCommand,1,"r",0,NULL,0,0,0,0,0}
 };
 
@@ -2335,8 +2336,16 @@ sds genRedisInfoString(char *section) {
     if (allsections || defsections || !strcasecmp(section,"memory")) {
         char hmem[64];
         char peak_hmem[64];
+        size_t zmalloc_used = zmalloc_used_memory();
 
-        bytesToHuman(hmem,zmalloc_used_memory());
+        /* Peak memory is updated from time to time by serverCron() so it
+         * may happen that the instantaneous value is slightly bigger than
+         * the peak value. This may confuse users, so we update the peak
+         * if found smaller than the current memory usage. */
+        if (zmalloc_used > server.stat_peak_memory)
+            server.stat_peak_memory = zmalloc_used;
+
+        bytesToHuman(hmem,zmalloc_used);
         bytesToHuman(peak_hmem,server.stat_peak_memory);
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info,
@@ -2349,7 +2358,7 @@ sds genRedisInfoString(char *section) {
             "used_memory_lua:%lld\r\n"
             "mem_fragmentation_ratio:%.2f\r\n"
             "mem_allocator:%s\r\n",
-            zmalloc_used_memory(),
+            zmalloc_used,
             hmem,
             zmalloc_get_rss(),
             server.stat_peak_memory,
@@ -3118,10 +3127,10 @@ int main(int argc, char **argv) {
             }
             j++;
         }
+        if (configfile) server.configfile = getAbsolutePath(configfile);
         resetServerSaveParams();
         loadServerConfig(configfile,options);
         sdsfree(options);
-        if (configfile) server.configfile = getAbsolutePath(configfile);
     } else {
         redisLog(REDIS_WARNING, "Warning: no config file specified, using the default config. In order to specify a config file use %s /path/to/%s.conf", argv[0], server.sentinel_mode ? "sentinel" : "redis");
     }
