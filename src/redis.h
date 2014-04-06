@@ -130,6 +130,7 @@
 #define REDIS_IP_STR_LEN INET6_ADDRSTRLEN
 #define REDIS_PEER_ID_LEN (REDIS_IP_STR_LEN+32) /* Must be enough for ip:port */
 #define REDIS_BINDADDR_MAX 16
+#define REDIS_MIN_RESERVED_FDS 32
 
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
@@ -147,9 +148,9 @@
 #define REDIS_AOF_AUTOSYNC_BYTES (1024*1024*16) /* fdatasync every 16MB */
 #define REDIS_RDB_AUTOSYNC_BYTES (1024*1024*16) /* fdatasync every 16MB */
 /* When configuring the Redis eventloop, we setup it so that the total number
- * of file descriptors we can handle are server.maxclients + FDSET_INCR
+ * of file descriptors we can handle are server.maxclients + RESERVED_FDS + FDSET_INCR
  * that is our safety margin. */
-#define REDIS_EVENTLOOP_FDSET_INCR 128
+#define REDIS_EVENTLOOP_FDSET_INCR (REDIS_MIN_RESERVED_FDS+96)
 
 /* Hash table parameters */
 #define REDIS_HT_MINFILL        10      /* Minimal hash table fill 10% */
@@ -388,13 +389,13 @@ typedef long long mstime_t; /* millisecond time type. */
 /* A redis object, that is a type able to hold a string / list / set */
 
 /* The actual Redis Object */
-#define REDIS_LRU_CLOCK_MAX ((1<<21)-1) /* Max value of obj->lru */
-#define REDIS_LRU_CLOCK_RESOLUTION 10 /* LRU clock resolution in seconds */
+#define REDIS_LRU_BITS 24
+#define REDIS_LRU_CLOCK_MAX ((1<<REDIS_LRU_BITS)-1) /* Max value of obj->lru */
+#define REDIS_LRU_CLOCK_RESOLUTION 1 /* LRU clock resolution in seconds */
 typedef struct redisObject {
     unsigned type:4;
-    unsigned notused:2;     /* Not used */
     unsigned encoding:4;
-    unsigned lru:22;        /* lru time (relative to server.lruclock) */
+    unsigned lru:REDIS_LRU_BITS; /* lru time (relative to server.lruclock) */
     int refcount;
     void *ptr;
 } robj;
@@ -597,8 +598,7 @@ struct redisServer {
     dict *commands;             /* Command table */
     dict *orig_commands;        /* Command table before command renaming. */
     aeEventLoop *el;
-    unsigned lruclock:22;       /* Clock incrementing every minute, for LRU */
-    unsigned lruclock_padding:10;
+    unsigned lruclock:REDIS_LRU_BITS; /* Clock for LRU eviction */
     int shutdown_asap;          /* SHUTDOWN needed ASAP */
     int activerehashing;        /* Incremental rehash in serverCron() */
     char *requirepass;          /* Pass for AUTH command, or NULL */
@@ -656,6 +656,7 @@ struct redisServer {
     struct complexity_param slowlog_complexity_params[REDIS_SLOWLOG_MAX_COMPLEXITY_PARAMS];
     int slowlog_complexity_params_count;    
     int stat_current_request_recorded;
+    size_t resident_set_size;       /* RSS sampled in serverCron(). */
     /* The following two are used to track instantaneous "load" in terms
      * of operations per second. */
     long long ops_sec_last_sample_time; /* Timestamp of last sample (in ms) */
@@ -778,7 +779,7 @@ struct redisServer {
     list *repl_scriptcache_fifo;        /* First in, first out LRU eviction. */
     int repl_scriptcache_size;          /* Max number of elements. */
     /* Limits */
-    unsigned int maxclients;        /* Max number of simultaneous clients */
+    int maxclients;                 /* Max number of simultaneous clients */
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
     int maxmemory_policy;           /* Policy for key eviction */
     int maxmemory_samples;          /* Pricision of random sampling */
@@ -1151,7 +1152,8 @@ void populateCommandTable(void);
 void resetCommandTableStats(void);
 void adjustOpenFilesLimit(void);
 void closeListeningSockets(int unlink_unix_socket);
-void updateCachedTime();
+void updateCachedTime(void);
+void resetServerStats(void);
 
 /* Set data type */
 robj *setTypeCreate(robj *value);

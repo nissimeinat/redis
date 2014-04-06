@@ -597,7 +597,7 @@ void configSetCommand(redisClient *c) {
     } else if (!strcasecmp(c->argv[2]->ptr,"maxclients")) {
         int orig_value = server.maxclients;
 
-        if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 1) goto badfmt;
 
         /* Try to check if the OS is capable of supporting so many FDs. */
         server.maxclients = ll;
@@ -1874,18 +1874,7 @@ void configCommand(redisClient *c) {
         configGetCommand(c);
     } else if (!strcasecmp(c->argv[1]->ptr,"resetstat")) {
         if (c->argc != 2) goto badarity;
-        server.stat_keyspace_read_hits = 0;
-        server.stat_keyspace_read_misses = 0;
-        server.stat_keyspace_write_hits = 0;
-        server.stat_keyspace_write_misses = 0;
-        server.stat_numcommands = 0;
-        server.stat_numconnections = 0;
-        server.stat_expiredkeys = 0;
-        server.stat_rejected_conn = 0;
-        server.stat_fork_time = 0;
-        server.stat_aof_rewrites = 0;
-        server.stat_rdb_saves = 0;
-        server.aof_delayed_fsync = 0;
+        resetServerStats();
         resetCommandTableStats();
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"rewrite")) {

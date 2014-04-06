@@ -275,6 +275,8 @@ proc foreach_instance_id {instances idvar code} {
             error $result $::errorInfo $::errorCode
         } elseif {$errcode == 4} {
             continue
+        } elseif {$errcode == 3} {
+            break
         } elseif {$errcode != 0} {
             return -code $errcode $result
         }
@@ -354,6 +356,12 @@ proc kill_instance {type id} {
 
     # Remove the PID from the list of pids to kill at exit.
     set ::pids [lsearch -all -inline -not -exact $::pids $pid]
+}
+
+# Return true of the instance of the specified type/id is killed.
+proc instance_is_killed {type id} {
+    set pid [get_instance_attrib $type $id pid]
+    return $pid == -1
 }
 
 # Restart an instance previously killed by kill_instance
