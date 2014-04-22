@@ -313,6 +313,9 @@
 #define REDIS_ZSET_MAX_ZIPLIST_ENTRIES 128
 #define REDIS_ZSET_MAX_ZIPLIST_VALUE 64
 
+/* HyperLogLog defines */
+#define REDIS_DEFAULT_HLL_SPARSE_MAX_BYTES 3000
+
 /* Sets operations codes */
 #define REDIS_OP_UNION 0
 #define REDIS_OP_DIFF 1
@@ -519,7 +522,7 @@ struct sharedObjectsStruct {
     *masterdownerr, *roslaveerr, *execaborterr, *noautherr, *noreplicaserr,
     *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
     *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *rpop, *lpop,
-    *lpush, *emptyscan,
+    *lpush, *emptyscan, *minstring, *maxstring,
     *drained, *draining,
     *select[REDIS_SHARED_SELECT_CMDS],
     *integers[REDIS_SHARED_INTEGERS],
@@ -801,6 +804,7 @@ struct redisServer {
     size_t set_max_intset_entries;
     size_t zset_max_ziplist_entries;
     size_t zset_max_ziplist_value;
+    size_t hll_sparse_max_bytes;
     time_t unixtime;        /* Unix time sampled every cron cycle. */
     long long mstime;       /* Like 'unixtime' but with milliseconds resolution. */
     /* Pubsub */
@@ -1106,18 +1110,24 @@ unsigned long aofRewriteBufferSize(void);
 
 /* Sorted sets data type */
 
-/* Struct to hold a inclusive/exclusive range spec. */
+/* Struct to hold a inclusive/exclusive range spec by score comparison. */
 typedef struct {
     double min, max;
     int minex, maxex; /* are min or max exclusive? */
 } zrangespec;
+
+/* Struct to hold an inclusive/exclusive range spec by lexicographic comparison. */
+typedef struct {
+    robj *min, *max;  /* May be set to shared.(minstring|maxstring) */
+    int minex, maxex; /* are min or max exclusive? */
+} zlexrangespec;
 
 zskiplist *zslCreate(void);
 void zslFree(zskiplist *zsl);
 zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj);
 unsigned char *zzlInsert(unsigned char *zl, robj *ele, double score);
 int zslDelete(zskiplist *zsl, double score, robj *obj);
-zskiplistNode *zslFirstInRange(zskiplist *zsl, zrangespec range);
+zskiplistNode *zslFirstInRange(zskiplist *zsl, zrangespec *range);
 double zzlGetScore(unsigned char *sptr);
 void zzlNext(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 void zzlPrev(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
@@ -1225,6 +1235,7 @@ void setKey(redisDb *db, robj *key, robj *val);
 int dbExists(redisDb *db, robj *key);
 robj *dbRandomKey(redisDb *db);
 int dbDelete(redisDb *db, robj *key);
+robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o);
 long long emptyDb(void(callback)(void*));
 int selectDb(redisClient *c, int id);
 void signalModifiedKey(redisDb *db, robj *key);
@@ -1347,12 +1358,16 @@ void zincrbyCommand(redisClient *c);
 void zrangeCommand(redisClient *c);
 void zrangebyscoreCommand(redisClient *c);
 void zrevrangebyscoreCommand(redisClient *c);
+void zrangebylexCommand(redisClient *c);
+void zrevrangebylexCommand(redisClient *c);
 void zcountCommand(redisClient *c);
+void zlexcountCommand(redisClient *c);
 void zrevrangeCommand(redisClient *c);
 void zcardCommand(redisClient *c);
 void zremCommand(redisClient *c);
 void zscoreCommand(redisClient *c);
 void zremrangebyscoreCommand(redisClient *c);
+void zremrangebylexCommand(redisClient *c);
 void multiCommand(redisClient *c);
 void execCommand(redisClient *c);
 void discardCommand(redisClient *c);
@@ -1405,6 +1420,11 @@ void bitopCommand(redisClient *c);
 void bitcountCommand(redisClient *c);
 void bitposCommand(redisClient *c);
 void replconfCommand(redisClient *c);
+void pfselftestCommand(redisClient *c);
+void pfaddCommand(redisClient *c);
+void pfcountCommand(redisClient *c);
+void pfmergeCommand(redisClient *c);
+void pfdebugCommand(redisClient *c);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));
