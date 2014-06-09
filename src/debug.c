@@ -326,6 +326,7 @@ void debugCommand(redisClient *c) {
 
         if (getLongFromObjectOrReply(c, c->argv[2], &keys, NULL) != REDIS_OK)
             return;
+        dictExpand(c->db->dict,keys);
         for (j = 0; j < keys; j++) {
             snprintf(buf,sizeof(buf),"key:%lu",j);
             key = createStringObject(buf,strlen(buf));
@@ -935,7 +936,7 @@ void enableWatchdog(int period) {
         /* Watchdog was actually disabled, so we have to setup the signal
          * handler. */
         sigemptyset(&act.sa_mask);
-        act.sa_flags = SA_NODEFER | SA_ONSTACK | SA_SIGINFO;
+        act.sa_flags = SA_ONSTACK | SA_SIGINFO;
         act.sa_sigaction = watchdogSignalHandler;
         sigaction(SIGALRM, &act, NULL);
     }

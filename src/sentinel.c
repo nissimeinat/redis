@@ -89,7 +89,7 @@ typedef struct sentinelAddr {
 
 /* Failover machine different states. */
 #define SENTINEL_FAILOVER_STATE_NONE 0  /* No failover in progress. */
-#define SENTINEL_FAILOVER_STATE_WAIT_START 1  /* Wait for failover_start_time*/ 
+#define SENTINEL_FAILOVER_STATE_WAIT_START 1  /* Wait for failover_start_time*/
 #define SENTINEL_FAILOVER_STATE_SELECT_SLAVE 2 /* Select slave to promote */
 #define SENTINEL_FAILOVER_STATE_SEND_SLAVEOF_NOONE 3 /* Slave -> Master */
 #define SENTINEL_FAILOVER_STATE_WAIT_PROMOTION 4 /* Wait slave to change role */
@@ -184,6 +184,8 @@ typedef struct sentinelRedisInstance {
     mstime_t failover_state_change_time;
     mstime_t failover_start_time;   /* Last failover attempt start time. */
     mstime_t failover_timeout;      /* Max time to refresh failover state. */
+    mstime_t failover_delay_logged; /* For what failover_start_time value we
+                                       logged the failover delay. */
     struct sentinelRedisInstance *promoted_slave; /* Promoted slave instance. */
     /* Scripts executed to notify admin or reconfigure clients: when they
      * are set to NULL no script is executed. */
@@ -492,7 +494,7 @@ int sentinelAddrIsEqual(sentinelAddr *a, sentinelAddr *b) {
 /* =========================== Events notification ========================== */
 
 /* Send an event to log, pub/sub, user notification script.
- * 
+ *
  * 'level' is the log level for logging. Only REDIS_WARNING events will trigger
  * the execution of the user notification script.
  *
@@ -615,7 +617,7 @@ void sentinelScheduleScriptExecution(char *path, ...) {
     }
     va_end(ap);
     argv[0] = sdsnew(path);
-    
+
     sj = zmalloc(sizeof(*sj));
     sj->flags = SENTINEL_SCRIPT_NONE;
     sj->retry_num = 0;
@@ -741,7 +743,7 @@ void sentinelCollectTerminatedScripts(void) {
         if (WIFSIGNALED(statloc)) bysignal = WTERMSIG(statloc);
         sentinelEvent(REDIS_DEBUG,"-script-child",NULL,"%ld %d %d",
             (long)pid, exitcode, bysignal);
-        
+
         ln = sentinelGetScriptListNodeByPid(pid);
         if (ln == NULL) {
             redisLog(REDIS_WARNING,"wait3() returned a pid (%ld) we can't find in our scripts execution queue!", (long)pid);
@@ -968,6 +970,7 @@ sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *
     ri->failover_state_change_time = 0;
     ri->failover_start_time = 0;
     ri->failover_timeout = SENTINEL_DEFAULT_FAILOVER_TIMEOUT;
+    ri->failover_delay_logged = 0;
     ri->promoted_slave = NULL;
     ri->notification_script = NULL;
     ri->client_reconfig_script = NULL;
@@ -1018,7 +1021,7 @@ sentinelRedisInstance *sentinelRedisInstanceLookupSlave(
 {
     sds key;
     sentinelRedisInstance *slave;
-  
+
     redisAssert(ri->flags & SRI_MASTER);
     key = sdscatprintf(sdsempty(),
         strchr(ip,':') ? "[%s]:%d" : "%s:%d",
@@ -1038,7 +1041,7 @@ const char *sentinelRedisInstanceTypeStr(sentinelRedisInstance *ri) {
 
 /* This function removes all the instances found in the dictionary of
  * sentinels in the specified 'master', having either:
- * 
+ *
  * 1) The same ip/port as specified.
  * 2) The same runid.
  *
@@ -1232,7 +1235,7 @@ int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *ip,
                                                  slave->addr->port);
     }
     dictReleaseIterator(di);
-    
+
     /* If we are switching to a different address, include the old address
      * as a slave as well, so that we'll be able to sense / reconfigure
      * the old master. */
@@ -1845,7 +1848,7 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
                     ri->slave_conf_change_time = mstime();
                 }
             }
-            
+
             /* master_link_status:<status> */
             if (sdslen(l) >= 19 && !memcmp(l,"master_link_status:",19)) {
                 ri->slave_master_link_status =
@@ -2128,6 +2131,7 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
             {
                 sentinelAddr *old_addr;
 
+                sentinelEvent(REDIS_WARNING,"+config-update-from",si,"%@");
                 sentinelEvent(REDIS_WARNING,"+switch-master",
                     master,"%s %s %d %s %d",
                     master->name,
@@ -2165,7 +2169,7 @@ void sentinelReceiveHelloMessages(redisAsyncContext *c, void *reply, void *privd
      * receive our messages as well this timestamp can be used to detect
      * if the link is probably disconnected even if it seems otherwise. */
     ri->pc_last_activity = mstime();
-   
+
     /* Sanity check in the reply we expect, so that the code that follows
      * can avoid to check for details. */
     if (r->type != REDIS_REPLY_ARRAY ||
@@ -2872,7 +2876,7 @@ void sentinelCheckSubjectivelyDown(sentinelRedisInstance *ri) {
     if (ri->last_ping_time)
         elapsed = mstime() - ri->last_ping_time;
 
-    /* Check if we are in need for a reconnection of one of the 
+    /* Check if we are in need for a reconnection of one of the
      * links, because we are detecting low activity.
      *
      * 1) Check if the command link seems connected, was connected not less
@@ -3238,7 +3242,7 @@ void sentinelStartFailover(sentinelRedisInstance *master) {
  * 1) Master must be in ODOWN condition.
  * 2) No failover already in progress.
  * 3) No failover already attempted recently.
- * 
+ *
  * We still don't know if we'll win the election so it is possible that we
  * start the failover but that we'll not be able to act.
  *
@@ -3252,7 +3256,22 @@ int sentinelStartFailoverIfNeeded(sentinelRedisInstance *master) {
 
     /* Last failover attempt started too little time ago? */
     if (mstime() - master->failover_start_time <
-        master->failover_timeout*2) return 0;
+        master->failover_timeout*2)
+    {
+        if (master->failover_delay_logged != master->failover_start_time) {
+            time_t clock = (master->failover_start_time +
+                            master->failover_timeout*2) / 1000;
+            char ctimebuf[26];
+
+            ctime_r(&clock,ctimebuf);
+            ctimebuf[24] = '\0'; /* Remove newline. */
+            master->failover_delay_logged = master->failover_start_time;
+            redisLog(REDIS_WARNING,
+                "Next failover delay: I will not start a failover before %s",
+                ctimebuf);
+        }
+        return 0;
+    }
 
     sentinelStartFailover(master);
     return 1;

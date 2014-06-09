@@ -535,6 +535,7 @@ void copyClientOutputBuffer(redisClient *dst, redisClient *src) {
     dst->reply_bytes = src->reply_bytes;
 }
 
+#define MAX_ACCEPTS_PER_CALL 1000
 static void acceptCommonHandler(int fd, int flags) {
     redisClient *c;
     if ((c = createClient(fd)) == NULL) {
@@ -564,36 +565,43 @@ static void acceptCommonHandler(int fd, int flags) {
 }
 
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
-    int cport, cfd;
+    int cport, cfd, max = MAX_ACCEPTS_PER_CALL;
     char cip[REDIS_IP_STR_LEN];
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
     REDIS_NOTUSED(privdata);
 
-    cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
-    if (cfd == ANET_ERR) {
-        redisLog(REDIS_WARNING,"Accepting client connection: %s", server.neterr);
-        return;
+    while(max--) {
+        cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
+        if (cfd == ANET_ERR) {
+            if (errno != EWOULDBLOCK)
+                redisLog(REDIS_WARNING,
+                    "Accepting client connection: %s", server.neterr);
+            return;
+        }
+        redisLog(REDIS_VERBOSE,"Accepted %s:%d", cip, cport);
+        acceptCommonHandler(cfd,0);
     }
-    redisLog(REDIS_VERBOSE,"Accepted %s:%d", cip, cport);
-    acceptCommonHandler(cfd,0);
 }
 
 void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
-    int cfd;
+    int cfd, max = MAX_ACCEPTS_PER_CALL;
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
     REDIS_NOTUSED(privdata);
 
-    cfd = anetUnixAccept(server.neterr, fd);
-    if (cfd == ANET_ERR) {
-        redisLog(REDIS_WARNING,"Accepting client connection: %s", server.neterr);
-        return;
+    while(max--) {
+        cfd = anetUnixAccept(server.neterr, fd);
+        if (cfd == ANET_ERR) {
+            if (errno != EWOULDBLOCK)
+                redisLog(REDIS_WARNING,
+                    "Accepting client connection: %s", server.neterr);
+            return;
+        }
+        redisLog(REDIS_VERBOSE,"Accepted connection to %s", server.unixsocket);
+        acceptCommonHandler(cfd,REDIS_UNIX_SOCKET);
     }
-    redisLog(REDIS_VERBOSE,"Accepted connection to %s", server.unixsocket);
-    acceptCommonHandler(cfd,REDIS_UNIX_SOCKET);
 }
-
 
 static void freeClientArgv(redisClient *c) {
     int j;
@@ -978,8 +986,10 @@ int processMultibulkBuffer(redisClient *c) {
             newline = strchr(c->querybuf+pos,'\r');
             if (newline == NULL) {
                 if (sdslen(c->querybuf) > REDIS_INLINE_MAX_SIZE) {
-                    addReplyError(c,"Protocol error: too big bulk count string");
+                    addReplyError(c,
+                        "Protocol error: too big bulk count string");
                     setProtocolError(c,0);
+                    return REDIS_ERR;
                 }
                 break;
             }
@@ -1582,4 +1592,27 @@ void flushSlavesOutputBuffers(void) {
             sendReplyToClient(server.el,slave->fd,slave,0);
         }
     }
+}
+
+/* This function is called by Redis in order to process a few events from
+ * time to time while blocked into some not interruptible operation.
+ * This allows to reply to clients with the -LOADING error while loading the
+ * data set at startup or after a full resynchronization with the master
+ * and so forth.
+ *
+ * It calls the event loop in order to process a few events. Specifically we
+ * try to call the event loop for times as long as we receive acknowledge that
+ * some event was processed, in order to go forward with the accept, read,
+ * write, close sequence needed to serve a client.
+ *
+ * The function returns the total number of events processed. */
+int processEventsWhileBlocked(void) {
+    int iterations = 4; /* See the function top-comment. */
+    int count = 0;
+    while (iterations--) {
+        int events = aeProcessEvents(server.el, AE_FILE_EVENTS|AE_DONT_WAIT);
+        if (!events) break;
+        count += events;
+    }
+    return count;
 }
