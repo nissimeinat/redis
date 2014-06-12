@@ -234,7 +234,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
         size_t obj_len;
         char dbuf[64];
 
-        if (lua_isnumber(lua,j+1)) {
+        if (lua_type(lua,j+1) == LUA_TNUMBER) {
             /* We can't use lua_tolstring() for number -> string conversion
              * since Lua uses a format specifier that loses precision. */
             lua_Number num = lua_tonumber(lua,j+1);
