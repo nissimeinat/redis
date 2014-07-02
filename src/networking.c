@@ -1588,7 +1588,7 @@ int checkClientOutputBufferLimits(redisClient *c) {
     if (server.slave_obuf_throttle_threshold &&
         server.slave_obuf_throttle_repl_rate &&
         server.slave_obuf_throttle_limit &&
-        class == REDIS_CLIENT_LIMIT_CLASS_SLAVE && 
+        class == REDIS_CLIENT_TYPE_SLAVE && 
         !server.throttle_resume_time_ms &&
         used_mem > server.slave_obuf_throttle_threshold &&
         c->replstate != REDIS_REPL_ONLINE) {
@@ -1606,7 +1606,7 @@ int checkClientOutputBufferLimits(redisClient *c) {
             
             server.throttle_resume_time_ms = mstime() + throttle_time_ms;
             if (time(NULL) - last_log_msg > 10) {
-                sds client = getClientInfoString(c);
+                sds client = catClientInfoString(sdsempty(), c);
 
                 redisLog(REDIS_WARNING, "Slave %s triggered request throttling.", client);
                 sdsfree(client);
