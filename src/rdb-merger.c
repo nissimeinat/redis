@@ -17,7 +17,7 @@ void init() {
 }
 
 static void printUsage() {
-    fprintf(stderr, "Garantia RDB merger\n");
+    fprintf(stderr, "Redis Labs RDB merger\n");
     fprintf(stderr, "  rdb-merger [-h][-c redis_conf.conf][-p] -o output_file.rdb input_file.rdb [input_file.rdb ...]\n");
     fprintf(stderr, "  Special output file name \"-\" will output to stdout.\n");
 }
