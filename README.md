@@ -202,10 +202,10 @@ Use rdb-merger to unify multiply RDB files into a single file. Usage:
 ```
 rdb-merger [-h][-c redis_conf.conf][-p] -o output_file.rdb input_file.rdb [input_file.rdb ...]
 ```
--h: Displays usage information.
--c: Specify a redis conf file to control the writing of the output RDB (for example ziplist configurations).
--p: Print progress in percentage (to stderr).
--o: Required. Output file to write merged RDBs to. Use - for writing output to stdout.
+-h: Displays usage information.  
+-c: Specify a redis conf file to control the writing of the output RDB (for example ziplist configurations).  
+-p: Print progress in percentage (to stderr).  
+-o: Required. Output file to write merged RDBs to. Use - for writing output to stdout.  
 
 
 [![githalytics.com alpha](https://cruel-carlota.pagodabox.com/ce4c1161c17a84e88ed541d89e4edf5f "githalytics.com")](http://githalytics.com/GarantiaData/redis)
