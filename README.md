@@ -200,7 +200,7 @@ when managing redis databases.
 ### rdb-merger ###
 Use rdb-merger to unify multiply RDB files into a single file. Usage:
 ```
-rdb-merger [-h][-c redis_conf.conf][-p] -o output_file.rdb input_file.rdb [input_file.rdb ...]
+rdb-merger [-h] [-c redis_conf.conf] [-p] -o output_file.rdb input_file.rdb [input_file.rdb ...]
 ```
 -h: Displays usage information.  
 -c: Specify a redis conf file to control the writing of the output RDB (for example ziplist configurations).  
