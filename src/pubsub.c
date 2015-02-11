@@ -48,6 +48,12 @@ int listMatchPubsubPattern(void *a, void *b) {
            (equalStringObjects(pa->pattern,pb->pattern));
 }
 
+/* Return the number of channels + patterns a client is subscribed to. */
+int clientSubscriptionsCount(redisClient *c) {
+    return dictSize(c->pubsub_channels)+
+           listLength(c->pubsub_patterns);
+}
+
 /* Subscribe a client to a channel. Returns 1 if the operation succeeded, or
  * 0 if the client was already subscribed to that channel. */
 int pubsubSubscribeChannel(redisClient *c, robj *channel) {
@@ -74,7 +80,7 @@ int pubsubSubscribeChannel(redisClient *c, robj *channel) {
     addReply(c,shared.mbulkhdr[3]);
     addReply(c,shared.subscribebulk);
     addReplyBulk(c,channel);
-    addReplyLongLong(c,dictSize(c->pubsub_channels)+listLength(c->pubsub_patterns));
+    addReplyLongLong(c,clientSubscriptionsCount(c));
     return retval;
 }
 
@@ -136,7 +142,7 @@ int pubsubSubscribePattern(redisClient *c, robj *pattern) {
     addReply(c,shared.mbulkhdr[3]);
     addReply(c,shared.psubscribebulk);
     addReplyBulk(c,pattern);
-    addReplyLongLong(c,dictSize(c->pubsub_channels)+listLength(c->pubsub_patterns));
+    addReplyLongLong(c,clientSubscriptionsCount(c));
     return retval;
 }
 
@@ -169,7 +175,7 @@ int pubsubUnsubscribePattern(redisClient *c, robj *pattern, int notify) {
 }
 
 /* Unsubscribe from all the channels. Return the number of channels the
- * client was subscribed from. */
+ * client was subscribed to. */
 int pubsubUnsubscribeAllChannels(redisClient *c, int notify) {
     dictIterator *di = dictGetSafeIterator(c->pubsub_channels);
     dictEntry *de;
@@ -278,6 +284,7 @@ void subscribeCommand(redisClient *c) {
 
     for (j = 1; j < c->argc; j++)
         pubsubSubscribeChannel(c,c->argv[j]);
+    c->flags |= REDIS_PUBSUB;
 }
 
 void unsubscribeCommand(redisClient *c) {
@@ -291,6 +298,7 @@ void unsubscribeCommand(redisClient *c) {
             n += pubsubUnsubscribeChannel(c,c->argv[j],1);
     }
     slowlogAddComplexityParam('N', n);
+    if (clientSubscriptionsCount(c) == 0) c->flags &= ~REDIS_PUBSUB;
 }
 
 void psubscribeCommand(redisClient *c) {
@@ -299,6 +307,7 @@ void psubscribeCommand(redisClient *c) {
     slowlogAddComplexityParam('N', listLength(c->pubsub_patterns));
     for (j = 1; j < c->argc; j++)
         pubsubSubscribePattern(c,c->argv[j]);
+    c->flags |= REDIS_PUBSUB;
 }
 
 void punsubscribeCommand(redisClient *c) {
@@ -312,6 +321,7 @@ void punsubscribeCommand(redisClient *c) {
         for (j = 1; j < c->argc; j++)
             pubsubUnsubscribePattern(c,c->argv[j],1);
     }
+    if (clientSubscriptionsCount(c) == 0) c->flags &= ~REDIS_PUBSUB;
 }
 
 void publishCommand(redisClient *c) {
@@ -356,7 +366,7 @@ void pubsubCommand(redisClient *c) {
             list *l = dictFetchValue(server.pubsub_channels,c->argv[j]);
 
             addReplyBulk(c,c->argv[j]);
-            addReplyBulkLongLong(c,l ? listLength(l) : 0);
+            addReplyLongLong(c,l ? listLength(l) : 0);
         }
     } else if (!strcasecmp(c->argv[1]->ptr,"numpat") && c->argc == 2) {
         /* PUBSUB NUMPAT */

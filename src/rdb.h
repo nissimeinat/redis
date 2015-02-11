@@ -107,6 +107,7 @@ int rdbSaveObjectType(rio *rdb, robj *o);
 int rdbLoadObjectType(rio *rdb);
 int rdbLoad(char *filename);
 int rdbSaveBackground(char *filename, int bgsavetype, int dbnum);
+int rdbSaveToSlavesSockets(void);
 void rdbRemoveTempFile(pid_t childpid);
 int rdbSave(char *filename, int dbnum);
 int rdbSaveObject(rio *rdb, robj *o);

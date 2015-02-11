@@ -212,19 +212,33 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     static robj **argv = NULL;
     static int argv_size = 0;
     static robj *cached_objects[LUA_CMD_OBJCACHE_SIZE];
-    static int cached_objects_len[LUA_CMD_OBJCACHE_SIZE];
+    static size_t cached_objects_len[LUA_CMD_OBJCACHE_SIZE];
+    static int inuse = 0;   /* Recursive calls detection. */
+
+    /* By using Lua debug hooks it is possible to trigger a recursive call
+     * to luaRedisGenericCommand(), which normally should never happen.
+     * To make this function reentrant is futile and makes it slower, but
+     * we should at least detect such a misuse, and abort. */
+    if (inuse) {
+        char *recursion_warning =
+            "luaRedisGenericCommand() recursive call detected. "
+            "Are you doing funny stuff with Lua debug hooks?";
+        redisLog(REDIS_WARNING,"%s",recursion_warning);
+        luaPushError(lua,recursion_warning);
+        return 1;
+    }
+    inuse++;
 
     /* Require at least one argument */
     if (argc == 0) {
         luaPushError(lua,
             "Please specify at least one argument for redis.call()");
+        inuse--;
         return 1;
     }
 
     /* Build the arguments vector */
-    if (!argv) {
-        argv = zmalloc(sizeof(robj*)*argc);
-    } else if (argv_size < argc) {
+    if (argv_size < argc) {
         argv = zrealloc(argv,sizeof(robj*)*argc);
         argv_size = argc;
     }
@@ -274,6 +288,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
         }
         luaPushError(lua,
             "Lua redis() command arguments must be strings or integers");
+        inuse--;
         return 1;
     }
 
@@ -401,6 +416,7 @@ cleanup:
     if (c->argv != argv) {
         zfree(c->argv);
         argv = NULL;
+        argv_size = 0;
     }
 
     if (raise_error) {
@@ -409,8 +425,10 @@ cleanup:
          * return the plain error. */
         lua_pushstring(lua,"err");
         lua_gettable(lua,-2);
+        inuse--;
         return lua_error(lua);
     }
+    inuse--;
     return 1;
 }
 
@@ -537,6 +555,7 @@ void luaLoadLib(lua_State *lua, const char *libname, lua_CFunction luafunc) {
 LUALIB_API int (luaopen_cjson) (lua_State *L);
 LUALIB_API int (luaopen_struct) (lua_State *L);
 LUALIB_API int (luaopen_cmsgpack) (lua_State *L);
+LUALIB_API int (luaopen_bit) (lua_State *L);
 
 void luaLoadLibraries(lua_State *lua) {
     luaLoadLib(lua, "", luaopen_base);
@@ -547,6 +566,7 @@ void luaLoadLibraries(lua_State *lua) {
     luaLoadLib(lua, "cjson", luaopen_cjson);
     luaLoadLib(lua, "struct", luaopen_struct);
     luaLoadLib(lua, "cmsgpack", luaopen_cmsgpack);
+    luaLoadLib(lua, "bit", luaopen_bit);
 
 #if 0 /* Stuff that we don't load currently, for sandboxing concerns. */
     luaLoadLib(lua, LUA_LOADLIBNAME, luaopen_package);
@@ -717,7 +737,7 @@ void scriptingInit(void) {
         server.lua_client->flags |= REDIS_LUA_CLIENT;
     }
 
-    /* Lua beginners ofter don't use "local", this is likely to introduce
+    /* Lua beginners often don't use "local", this is likely to introduce
      * subtle bugs in their code. To prevent problems we protect accesses
      * to global variables. */
     scriptingEnableGlobalsProtection(lua);
@@ -912,6 +932,9 @@ void evalGenericCommand(redisClient *c, int evalsha) {
         return;
     if (numkeys > (c->argc - 3)) {
         addReplyError(c,"Number of keys can't be greater than number of args");
+        return;
+    } else if (numkeys < 0) {
+        addReplyError(c,"Number of keys can't be negative");
         return;
     }
 
