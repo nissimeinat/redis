@@ -70,7 +70,7 @@ struct _rio {
         /* Stdio file pointer target. */
         struct {
             FILE *fp;
-            off_t autosync; /* fsync after 'autosync' bytes written. */
+            size_t autosync; /* fsync after 'autosync' bytes written. */
         } file;
         /* Multiple FDs target (used to write to N sockets). */
         struct {

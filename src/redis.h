@@ -719,7 +719,7 @@ struct redisServer {
     unsigned long long slave_obuf_throttle_threshold;   /* Slave output buffer threshold for thorttling */
     unsigned long long slave_obuf_throttle_limit;       /* Largest slave output buffer while throttling */
     unsigned long long slave_obuf_throttle_repl_rate;   /* Replication rate (bytes/sec) */
-    int slave_obuf_throttle_max_delay_ms;               /* Maxium throttle-down delay, in ms */
+    unsigned int slave_obuf_throttle_max_delay_ms;      /* Maxium throttle-down delay, in ms */
     long long throttle_resume_time_ms;                  /* Throttle down existing connections until time */
     /* AOF persistence */
     int aof_state;                  /* REDIS_AOF_(ON|OFF|WAIT_REWRITE) */

@@ -885,9 +885,9 @@ void configSetCommand(redisClient *c) {
         int vlen;
         char *err;
         sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
-        unsigned long long slave_obuf_throttle_threshold;
-        unsigned long long slave_obuf_throttle_limit;
-        unsigned long long slave_obuf_throttle_repl_rate;
+        long long slave_obuf_throttle_threshold;
+        long long slave_obuf_throttle_limit;
+        long long slave_obuf_throttle_repl_rate;
         int slave_obuf_throttle_max_delay_ms;
 
         if (vlen != 4) {
