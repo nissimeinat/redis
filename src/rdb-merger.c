@@ -26,13 +26,21 @@ int main(int argc, char **argv) {
     int opt;
     char *conf = NULL;
     char *outfile = NULL;
+	char *skipKeyPattern=NULL;
     int progress = 0;
+	
+	
+	
+	
     /* Parse args */
-    while ((opt = getopt(argc, argv, "hc:o:p")) != -1) {
+    while ((opt = getopt(argc, argv, "hc:k:o:p")) != -1) {
         switch (opt) {
             case 'c':
                 conf = optarg;
                 break;
+			case 'k':
+                skipKeyPattern = optarg;
+                break;	
             case 'o':
                 outfile = optarg;
                 break;
@@ -65,7 +73,7 @@ int main(int argc, char **argv) {
     
     init();
     
-    if (mergeRdbs(argc - optind, argv + optind, outfile, progress) != REDIS_OK) {
+    if (mergeRdbs(argc - optind, argv + optind, outfile, progress , skipKeyPattern) != REDIS_OK) {
         fprintf(stderr, "Error merging rdb files\n");
         return 1;
     }

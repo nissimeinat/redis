@@ -1301,18 +1301,41 @@ void rdbCksumAndProgressCallback(rio *r, const void *buf, size_t len) {
 }
 
 #define FREE_ROBJ(o) do { decrRefCount(o); o = NULL; } while (0)
-int mergeRdbs(int ifile_count, char **infiles, char *outfile, const int progress) {
+int mergeRdbs(int ifile_count, char **infiles, char *outfile, const int progress , char *skipKeyPattern) {
     FILE *ifp = NULL;
     FILE *ofp = NULL;
     int type, rdbver;
     char buf[1024];
     robj *key = NULL;
     robj *val = NULL;
+	
+    
     long long expiretime;
     char magic[10];
     rio rdb;
     rio irdb;
     uint64_t cksum;
+	
+	//// FOR MERGE INT VALUES
+	dict *mergeValuesdict= dictCreate(&dbDictType,NULL);
+	dict *uniqueVals= dictCreate(&dbDictType,NULL);
+	dict *hashDict= dictCreate(&dbDictType,NULL);
+	int retval;
+	robj *new_robj;
+	robj *curr_val , *curr_hash_val;
+	dictEntry *currentEntry;
+	long long value , value2  ;
+	unsigned long counter=0;
+	unsigned long merged_counter=0;
+	unsigned long hash_merged_counter=0;
+	int skip=0;
+	int skipExists=0;
+	int rdbExpiretimeAdded=0;
+	hashTypeIterator *hi;
+	robj *hfield,  *hvalue,*hvalue2;
+	
+	
+	
 
     if (!strcmp(outfile, "-"))
         ofp = stdout;
@@ -1365,7 +1388,8 @@ int mergeRdbs(int ifile_count, char **infiles, char *outfile, const int progress
             errno = EINVAL;
             goto err;
         }
-
+		
+	
         while(1) {
             /* Read type. */
             if ((type = rdbLoadType(&irdb)) == -1) goto err;
@@ -1394,34 +1418,158 @@ int mergeRdbs(int ifile_count, char **infiles, char *outfile, const int progress
                 continue;
             }
             /* Handle expire time */
-            else if (type == REDIS_RDB_OPCODE_EXPIRETIME) {
-                if (rdbSaveType(&rdb,REDIS_RDB_OPCODE_EXPIRETIME_MS) == -1) goto err;
-                if ((expiretime = rdbLoadTime(&irdb)) == -1) goto err;
-                if (rdbSaveMillisecondTime(&rdb,expiretime*1000) == -1) goto err;
+            else if (type == REDIS_RDB_OPCODE_EXPIRETIME ) {
+				if ((expiretime = rdbLoadTime(&irdb)) == -1) goto err;
+				if( rdbExpiretimeAdded ==0) ///take the firs expiry
+				{
+					if (rdbSaveType(&rdb,REDIS_RDB_OPCODE_EXPIRETIME_MS) == -1) goto err;
+					if (rdbSaveMillisecondTime(&rdb,expiretime*1000) == -1) goto err;
+					rdbExpiretimeAdded=1;
+				}
                 continue;
             }
-            else if (type == REDIS_RDB_OPCODE_EXPIRETIME_MS) {
-                if (rdbSaveType(&rdb,REDIS_RDB_OPCODE_EXPIRETIME_MS) == -1) goto err;
-                if ((expiretime = rdbLoadMillisecondTime(&irdb)) == -1) goto err;
-                if (rdbSaveMillisecondTime(&rdb,expiretime) == -1) goto err;
-                continue;
+            else if (type == REDIS_RDB_OPCODE_EXPIRETIME_MS   ) {
+				if ((expiretime = rdbLoadMillisecondTime(&irdb)) == -1) goto err;
+				if( rdbExpiretimeAdded ==0)
+				{
+					if (rdbSaveType(&rdb,REDIS_RDB_OPCODE_EXPIRETIME_MS) == -1) goto err;
+					if (rdbSaveMillisecondTime(&rdb,expiretime) == -1) goto err;
+					rdbExpiretimeAdded=1;
+				}
+				continue;
             }
 
             /* Load key and value */
             if ((key = rdbLoadStringObject(&irdb)) == NULL) goto err;
             if ((val = rdbLoadObject(type,&irdb)) == NULL) goto err;
 
-            /* Ignore the special db version key */
-            if (strcmp(key->ptr, REDIS_RDB_DBVERSION_KEY) != 0) {
-                /* Save the object */
-                if (rdbSaveType(&rdb,type) == -1) goto err;
-                if (rdbSaveStringObject(&rdb,key) == -1) goto err;
-                if (rdbSaveObject(&rdb,val) == -1) goto err;
-            }
-            FREE_ROBJ(key);
-            FREE_ROBJ(val);
+			 counter++;
+			
+			skipExists = (dictFind(uniqueVals , key->ptr ) != NULL ) ? 1 : 0;
+			skip = (skipKeyPattern !=NULL && strstr(key->ptr,skipKeyPattern) == key->ptr ) ? 1 :0; ///skip keys start with pattern
+			
+
+			if( skip!=1 && val->type == REDIS_STRING && val->encoding== REDIS_ENCODING_INT )
+			{		
+				if( (currentEntry = dictFind(mergeValuesdict , key->ptr ) ) !=NULL )
+				{			
+					 if (getLongLongFromObject(val, &value) != REDIS_OK) 
+					 {
+						printf("failed to getLongLongFromObject");
+						exit(1);	
+					 }
+					
+					curr_val = dictGetVal( currentEntry );
+					getLongLongFromObject( curr_val , &value2);	
+					value2 +=value;
+					new_robj = createStringObjectFromLongLong(value2);									
+					dictReplace( mergeValuesdict ,  currentEntry->key , new_robj);	
+					merged_counter++;
+
+					FREE_ROBJ(key);
+					FREE_ROBJ(val);
+				}	
+				else
+				{
+					retval = dictAdd(mergeValuesdict , key->ptr , val );					
+				}
+					 
+			}
+			else if(skip!=1  && val->type==REDIS_RDB_TYPE_HASH  )
+			{
+
+				if( (currentEntry = dictFind(hashDict , key->ptr ) ) !=NULL )
+				{
+					
+					curr_hash_val = dictGetVal( currentEntry );
+					hi = hashTypeInitIterator(val);
+					while (hashTypeNext(hi) != REDIS_ERR) 
+					{
+						hash_merged_counter++; ///for debug
+						
+						hfield = hashTypeCurrentObject(hi, REDIS_HASH_KEY);
+						hfield = tryObjectEncoding(hfield);
+						hvalue = hashTypeCurrentObject(hi, REDIS_HASH_VALUE);
+						hvalue = tryObjectEncoding(hvalue);
+						
+						hvalue2 = hashTypeGetObject(curr_hash_val , hfield ) ;
+						if( 
+							(hvalue->type == REDIS_STRING && hvalue->encoding == REDIS_ENCODING_INT )
+							&&
+							(hvalue2->type == REDIS_STRING && hvalue2->encoding == REDIS_ENCODING_INT )
+						)
+						{
+							getLongLongFromObject( hvalue2 , &value2);
+							getLongLongFromObject( hvalue , &value);
+							value2 +=value;
+							//printf("key %s | val  %u | %u \n" , hfield->ptr,   value, (long)hvalue2->ptr );
+							new_robj = createStringObjectFromLongLong(value2);
+							hashTypeSet( curr_hash_val, hfield ,  new_robj);
+							
+						}
+						
+						FREE_ROBJ(hfield);
+						FREE_ROBJ(hvalue);
+					}
+					FREE_ROBJ(key);
+					FREE_ROBJ(val);
+
+				}
+				else
+				{
+					retval = dictAdd(hashDict , key->ptr , val );
+				}
+			}
+			else if( skipExists !=1 )
+			{
+				/* Ignore the special db version key */
+				if (strcmp(key->ptr, REDIS_RDB_DBVERSION_KEY) != 0) {
+					
+					//tryObjectEncoding(key);
+					//tryObjectEncoding(val);
+					
+					/* Save the object */
+					if (rdbSaveType(&rdb,type) == -1) goto err;
+					if (rdbSaveStringObject(&rdb,key) == -1) goto err;
+				    if (rdbSaveObject(&rdb,val) == -1) goto err;
+				}
+				retval = dictAdd(uniqueVals , key->ptr , val );
+			}
+			else
+			{
+				FREE_ROBJ(key);
+				FREE_ROBJ(val);
+			}
+			
         }
     }
+
+	////iterate over the dict and write to rdb the mered values
+	dictIterator *di;
+	di = dictGetIterator(mergeValuesdict);
+	 while((currentEntry = dictNext(di)) != NULL) 
+	 {
+		curr_val = dictGetVal( currentEntry );	
+		tryObjectEncoding(curr_val);
+		// Save the object 
+		if (rdbSaveObjectType(&rdb,curr_val) == -1) goto err;
+		if (rdbSaveRawString(&rdb, currentEntry->key , sdslen( currentEntry->key )  )== -1) goto err;
+	    if (rdbSaveObject(&rdb,curr_val) == -1) goto err;							
+	 }
+	
+	////save the hashes
+	di = dictGetIterator(hashDict);
+	 while((currentEntry = dictNext(di)) != NULL) 
+	 {
+		curr_val = dictGetVal( currentEntry );
+		tryObjectEncoding(curr_val);
+		// Save the object 
+		if (rdbSaveObjectType(&rdb,curr_val) == -1) goto err; 
+		if (rdbSaveRawString(&rdb, currentEntry->key , sdslen( currentEntry->key )  )== -1) goto err;
+	    if (rdbSaveObject(&rdb,curr_val) == -1) goto err;							
+	 }	
+	
+
     /* Save EOF opcode */
     if (rdbSaveType(&rdb,REDIS_RDB_OPCODE_EOF) == -1) goto err;
     /* CRC64 checksum. It will be zero if checksum computation is disabled, the
@@ -1431,6 +1579,10 @@ int mergeRdbs(int ifile_count, char **infiles, char *outfile, const int progress
     if (rioWrite(&rdb,&cksum,8) == 0) goto err;
 
     fclose(ofp);
+	
+	
+	printf("\ndone, %u entries in total | merged count: %u | hash_merged_counter %u\n", counter , merged_counter , hash_merged_counter );
+	
     return REDIS_OK;
 
 err:
